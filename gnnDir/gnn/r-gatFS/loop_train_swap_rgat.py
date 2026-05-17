@@ -19,6 +19,11 @@ if str(_RGAT_DIR) not in sys.path:
 # gnnDir/ is two levels above r-gatFS/ (r-gatFS -> gnn -> gnnDir).
 _GNN_ROOT = _RGAT_DIR.parent.parent
 
+_GNN_PKG_DIR = _RGAT_DIR.parent
+if str(_GNN_PKG_DIR) not in sys.path:
+    sys.path.insert(0, str(_GNN_PKG_DIR))
+from mask_history import save_round_mask_snapshot  # noqa: E402
+
 from model_gat import FSGAT  # noqa: E402
 from train_fs_gat import (  # noqa: E402
     _NUM_RELATIONS,
@@ -241,7 +246,8 @@ def parse_args() -> argparse.Namespace:
             "Loop train GAT (FS): for rounds 1..max-curate, curate val/train masks "
             "(drop worst val to inactive, move best train to val; |val| fixed, |train| shrinks). "
             "From round max-curate+1 on, exchange worst val <-> best train (sizes fixed). "
-            "Writes train_mask.pt / val_mask.pt under --data-dir."
+            "Writes train_mask.pt / val_mask.pt under --data-dir; optional per-round mask snapshots "
+            "(see mask_history.py)."
         )
     )
     p.add_argument(
@@ -286,6 +292,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Default: out-dir / gat_mask_swap_history.csv",
     )
+    p.add_argument(
+        "--mask-history-dir",
+        type=Path,
+        default=None,
+        help="Per-round train/val mask .pt snapshots (default: out-dir/mask_round_history).",
+    )
+    p.add_argument(
+        "--no-mask-history",
+        action="store_true",
+        help="Disable per-round mask snapshot files.",
+    )
     return p.parse_args()
 
 
@@ -298,6 +315,15 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     state_path = Path(args.state_path).resolve() if args.state_path else out_dir / STATE_NAME
     history_csv = Path(args.history_csv).resolve() if args.history_csv else out_dir / HISTORY_NAME
+    mask_hist_dir: Path | None
+    if args.no_mask_history:
+        mask_hist_dir = None
+    else:
+        mask_hist_dir = (
+            Path(args.mask_history_dir).resolve()
+            if args.mask_history_dir is not None
+            else out_dir / "mask_round_history"
+        )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ckpt_path = out_dir / "best_fs_gat.pt"
@@ -319,6 +345,7 @@ def main() -> None:
         f"swap_batch_size={args.swap_batch_size} max_curate={args.max_curate} max_rounds={args.max_rounds}"
     )
     print(f"[INIT] state_path={state_path} history_csv={history_csv}")
+    print(f"[INIT] mask_history_dir={mask_hist_dir if mask_hist_dir is not None else '(disabled)'}")
 
     round_idx = int(state.get("last_round", 0))
 
@@ -469,6 +496,9 @@ def main() -> None:
                 f"(rel% head {best_pcts[0]:.2f}..{best_pcts[-1]:.2f}) phase={phase}"
             )
 
+        train_during = train_mask.detach().cpu().bool().clone()
+        val_during = val_mask.detach().cpu().bool().clone()
+
         if use_curate:
             _apply_mask_curate_batch(train_mask, val_mask, worst_nodes, best_nodes)
         else:
@@ -479,6 +509,25 @@ def main() -> None:
         val_mask_cpu = val_mask.detach().cpu().bool()
         torch.save(train_mask_cpu, data_dir / "train_mask.pt")
         torch.save(val_mask_cpu, data_dir / "val_mask.pt")
+
+        train_after = train_mask_cpu.clone()
+        val_after = val_mask_cpu.clone()
+        if mask_hist_dir is not None:
+            snap_path = save_round_mask_snapshot(
+                mask_hist_dir,
+                round_idx,
+                train_during,
+                val_during,
+                train_after,
+                val_after,
+                meta={
+                    "mask_op": mask_op,
+                    "phase": phase,
+                    "effective_k": k_eff,
+                    "data_dir": str(data_dir),
+                },
+            )
+            print(f"[ROUND {round_idx}] mask snapshot -> {snap_path}")
 
         state["total_swaps"] = int(state.get("total_swaps", 0)) + 1
         state["last_round"] = round_idx
