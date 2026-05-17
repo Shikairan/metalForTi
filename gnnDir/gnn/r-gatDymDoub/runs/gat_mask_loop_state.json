@@ -1,0 +1,17 @@
+{
+  "total_swaps": 102,
+  "last_round": 102,
+  "last_worst_val_node": 538,
+  "last_best_train_node": 322,
+  "last_swap_batch_size": 1,
+  "last_effective_k": 1,
+  "last_worst_val_nodes": [
+    538
+  ],
+  "last_best_train_nodes": [
+    322
+  ],
+  "curate_phase_complete": true,
+  "hist_best_val_mae_ys": 0.03830070421099663,
+  "hist_best_val_mae_fs": 0.1999170482158661
+}
