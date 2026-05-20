@@ -48,6 +48,7 @@ By default, `train_fs_gat.py` allows **inactive** nodes. Use **`--no-allow-inact
 
 - Default **`--out-dir`**: `gnn/r-gatDoubel/runs` (`best_ysfs_gat.pt`, `gat_mask_loop_state.json`, `gat_mask_swap_history.csv`).
 - History CSV includes **`train_mae_fs` / `val_mae_fs` / `train_mae_ys` / `val_mae_ys`** (new files only; existing CSVs are not migrated).
+- **Conditional mask save:** after each round, if **`val_worst_rel_pct_ys`** and **`val_worst_rel_pct_fs`** are both strictly below **`--save-mask-rel-threshold`** (default `10`), the pre-swap masks are written under **`{out-dir}/mask_val_lt10/round_NNNNNN/`** (`train_mask.pt`, `val_mask.pt`, `summary.json`; parent **`index.json`** lists all rounds). Disable with **`--no-save-mask-lt10`**; override root with **`--save-mask-lt10-dir`**.
 
 ```bash
 cd /home/data/symbolTransformer/symtest/gnnDir/gnn/r-gatDoubel

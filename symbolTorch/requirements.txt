@@ -1,0 +1,13 @@
+# symbolTorch — use Python >= 3.11 (torch-symbolic requirement)
+#
+# Recommended:
+#   /root/miniconda3/bin/python3.13 -m pip install -r requirements.txt
+#
+# Also requires Julia for PySR (installed automatically on first run).
+
+numpy>=1.24.0,<2.0.0
+pandas>=2.0.0,<3.0.0
+torch>=2.0.0
+torch-geometric>=2.7.0
+torch-symbolic>=1.0.1
+scikit-learn>=1.3.0

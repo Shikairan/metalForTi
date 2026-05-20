@@ -60,6 +60,86 @@ def save_round_mask_snapshot(
     return path
 
 
+def save_conditional_mask_pair(
+    out_dir: Path,
+    round_idx: int,
+    train_mask: torch.Tensor,
+    val_mask: torch.Tensor,
+    *,
+    meta: Optional[Dict[str, Any]] = None,
+) -> Path:
+    """Save train/val masks when a loop round meets a quality threshold (e.g. dual worst rel%% < 10).
+
+    Writes under ``{out_dir}/round_{N}/``:
+
+    - ``train_mask.pt``, ``val_mask.pt``, ``summary.json``
+    - appends an entry to ``{out_dir}/index.json``
+    """
+    out_dir = Path(out_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    r = int(round_idx)
+    round_dir = out_dir / f"round_{r:06d}"
+    round_dir.mkdir(parents=True, exist_ok=True)
+
+    train_b = train_mask.detach().cpu().bool().reshape(-1).clone()
+    val_b = val_mask.detach().cpu().bool().reshape(-1).clone()
+    n = int(train_b.numel())
+    inactive = ~(train_b | val_b)
+
+    train_path = round_dir / "train_mask.pt"
+    val_path = round_dir / "val_mask.pt"
+    torch.save(train_b, train_path)
+    torch.save(val_b, val_path)
+
+    summary: Dict[str, Any] = {
+        "round": r,
+        "round_dir": round_dir.name,
+        "num_nodes": n,
+        "train_count": int(train_b.sum().item()),
+        "val_count": int(val_b.sum().item()),
+        "inactive_count": int(inactive.sum().item()),
+        "train_mask_path": "train_mask.pt",
+        "val_mask_path": "val_mask.pt",
+        "meta": meta or {},
+    }
+    side = round_dir / "summary.json"
+    with side.open("w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+
+    index_path = out_dir / "index.json"
+    index: Dict[str, Any] = {"entries": []}
+    if index_path.is_file():
+        with index_path.open("r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict) and isinstance(loaded.get("entries"), list):
+            index = loaded
+    entry = {
+        "round": r,
+        "round_dir": round_dir.name,
+        "train_mask": str(train_path.relative_to(out_dir)),
+        "val_mask": str(val_path.relative_to(out_dir)),
+        "summary_json": str(side.relative_to(out_dir)),
+    }
+    if meta:
+        for key in (
+            "val_worst_rel_pct_ys",
+            "val_worst_rel_pct_fs",
+            "val_mae_ys",
+            "val_mae_fs",
+            "rel_threshold",
+        ):
+            if key in meta:
+                entry[key] = meta[key]
+    index["entries"] = [
+        e for e in index["entries"] if int(e.get("round", -1)) != r
+    ]
+    index["entries"].append(entry)
+    index["entries"].sort(key=lambda e: int(e.get("round", 0)))
+    with index_path.open("w", encoding="utf-8") as f:
+        json.dump(index, f, indent=2, ensure_ascii=False)
+    return round_dir
+
+
 def load_round_snapshot(path: Path) -> Dict[str, Any]:
     return torch.load(path, map_location="cpu")
 

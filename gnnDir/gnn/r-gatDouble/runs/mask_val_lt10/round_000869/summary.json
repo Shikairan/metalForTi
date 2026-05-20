@@ -1,0 +1,19 @@
+{
+  "round": 869,
+  "round_dir": "round_000869",
+  "num_nodes": 604,
+  "train_count": 433,
+  "val_count": 121,
+  "inactive_count": 50,
+  "train_mask_path": "train_mask.pt",
+  "val_mask_path": "val_mask.pt",
+  "meta": {
+    "val_worst_rel_pct_ys": 9.019842147827148,
+    "val_worst_rel_pct_fs": 9.635944366455078,
+    "val_mae_ys": 0.0279934573918581,
+    "val_mae_fs": 0.03529568761587143,
+    "rel_threshold": 10.0,
+    "data_dir": "/home/data/metalTi/metalForTi/gnnDir/gnndataPT/r-gatPT",
+    "phase": "exchange"
+  }
+}

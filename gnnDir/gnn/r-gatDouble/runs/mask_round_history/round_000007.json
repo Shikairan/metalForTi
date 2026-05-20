@@ -1,0 +1,16 @@
+{
+  "round": 7,
+  "num_nodes": 604,
+  "train_count_during": 477,
+  "val_count_during": 121,
+  "inactive_count_during": 6,
+  "train_count_after": 476,
+  "val_count_after": 121,
+  "inactive_count_after": 7,
+  "meta": {
+    "mask_op": "curate",
+    "phase": "curate",
+    "effective_k": 1,
+    "data_dir": "/home/data/metalTi/metalForTi/gnnDir/gnndataPT/r-gatPT"
+  }
+}

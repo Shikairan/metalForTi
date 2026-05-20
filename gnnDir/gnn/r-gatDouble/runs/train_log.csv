@@ -1,0 +1,3 @@
+epoch,train_mse_ys,train_mse_fs,train_mae_fs,val_mae_fs,train_mae_ys,val_mae_ys,val_score,val_half_rel_pct_ys,val_half_rel_pct_fs,val_worst_rel_pct_ys,val_worst_rel_pct_fs,val_worst_node_idx,val_worst_pred_raw_fs,val_worst_true_raw_fs,val_last_lt10_sorted_numb
+1,0.89787036,1.64820123,0.99318027,1.02713025,0.66535282,0.72753322,1.75466347,54.23670959,57.87220764,81.01318359,93.42966461,575,1.00128162,15.23943424,0
+2,0.56748605,1.30444741,0.84697706,0.87188554,0.52912062,0.58563048,1.45751601,47.16140747,49.74206543,78.07572937,92.23117828,575,1.18392503,15.23943424,0

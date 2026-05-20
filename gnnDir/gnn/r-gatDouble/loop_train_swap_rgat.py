@@ -22,7 +22,10 @@ _GNN_ROOT = _RGAT_DIR.parent.parent
 _GNN_PKG_DIR = _RGAT_DIR.parent
 if str(_GNN_PKG_DIR) not in sys.path:
     sys.path.insert(0, str(_GNN_PKG_DIR))
-from mask_history import save_round_mask_snapshot  # noqa: E402
+from mask_history import (  # noqa: E402
+    save_conditional_mask_pair,
+    save_round_mask_snapshot,
+)
 
 from model_gat import RGAT_Dual  # noqa: E402
 from train_fs_gat import (  # noqa: E402
@@ -265,11 +268,117 @@ def _apply_mask_curate_batch(
         _apply_mask_curate(train_mask, val_mask, w, b)
 
 
-def _fmt_id_list(ids: List[int], max_show: int = 8) -> str:
-    if len(ids) <= max_show:
-        return ",".join(map(str, ids))
-    head = ",".join(map(str, ids[:max_show]))
-    return f"{head},...(+{len(ids) - max_show})"
+def _mask_split_counts(
+    train_mask: torch.Tensor, val_mask: torch.Tensor
+) -> Tuple[int, int, int, int]:
+    tm = train_mask.detach().cpu().bool().reshape(-1)
+    vm = val_mask.detach().cpu().bool().reshape(-1)
+    inactive = ~(tm | vm)
+    n = int(tm.numel())
+    return int(tm.sum()), int(vm.sum()), int(inactive.sum()), n
+
+
+def _node_rel_triplet(
+    pred_ys: torch.Tensor,
+    pred_fs: torch.Tensor,
+    ys: torch.Tensor,
+    fs: torch.Tensor,
+    node_idx: int,
+    *,
+    eps: float = 1e-6,
+) -> Tuple[float, float, float]:
+    rel_y = _rel_pct_vec(pred_ys, ys, eps=eps)
+    rel_f = _rel_pct_vec(pred_fs, fs, eps=eps)
+    i = int(node_idx)
+    ry = float(rel_y[i].item())
+    rf = float(rel_f[i].item())
+    return ry, rf, ry + rf
+
+
+def _print_round_end_summary(
+    *,
+    round_idx: int,
+    use_curate: bool,
+    max_curate: int,
+    k_req: int,
+    k_eff: int,
+    worst_nodes: List[int],
+    best_nodes: List[int],
+    pred_ys: torch.Tensor,
+    pred_fs: torch.Tensor,
+    ys: torch.Tensor,
+    fs: torch.Tensor,
+    train_mae_ys: float,
+    train_mae_fs: float,
+    val_mae_ys: float,
+    val_mae_fs: float,
+    val_worst_pair: List[float],
+    val_half_pair: List[float],
+    val_last_lt10_n: int,
+    counts_before: Tuple[int, int, int, int],
+    counts_after: Tuple[int, int, int, int],
+    lt10_saved: bool,
+    elapsed_sec: float,
+) -> None:
+    mode_cn = "策展(curate)" if use_curate else "交换(swap)"
+    phase_hint = (
+        f"第 {round_idx}/{max_curate} 轮策展阶段"
+        if use_curate
+        else f"第 {round_idx} 轮（已过策展，进入 train↔val 交换）"
+    )
+    bar = "=" * 72
+    print(f"\n{bar}")
+    print(f"  ROUND {round_idx} 结束 · {mode_cn} · {phase_hint}")
+    print(bar)
+    print(
+        f"  验证: val_MAE_YS={val_mae_ys:.6f} val_MAE_FS={val_mae_fs:.6f} "
+        f"| train_MAE_YS={train_mae_ys:.6f} train_MAE_FS={train_mae_fs:.6f}"
+    )
+    print(
+        f"  相对误差%%: val最差=[YS {val_worst_pair[0]:.2f}, FS {val_worst_pair[1]:.2f}] "
+        f"val中位=[YS {val_half_pair[0]:.2f}, FS {val_half_pair[1]:.2f}] "
+        f"| val双头均<10%%的样本数={val_last_lt10_n}"
+    )
+    if k_eff < k_req:
+        print(f"  批大小: 请求 k={k_req}，实际生效 k={k_eff}（受 train/val 池大小限制）")
+    else:
+        print(f"  批大小: k={k_eff}")
+
+    print("  --- 本轮划分变动 ---")
+    if not worst_nodes:
+        print("  （无节点变动）")
+    else:
+        for i, (w_node, b_node) in enumerate(zip(worst_nodes, best_nodes), start=1):
+            wy, wf, wc = _node_rel_triplet(pred_ys, pred_fs, ys, fs, w_node)
+            by, bf, bc = _node_rel_triplet(pred_ys, pred_fs, ys, fs, b_node)
+            if use_curate:
+                print(
+                    f"  [{i}] 移入垃圾库(inactive): 节点 {w_node} "
+                    f"(原验证集) 综合rel%%={wc:.2f} (YS {wy:.2f}% + FS {wf:.2f}%)"
+                )
+                print(
+                    f"      升入验证集: 节点 {b_node} "
+                    f"(原训练集) 综合rel%%={bc:.2f} (YS {by:.2f}% + FS {bf:.2f}%)"
+                )
+            else:
+                print(
+                    f"  [{i}] 交换: 验证集节点 {w_node} (综合rel%%={wc:.2f}, YS {wy:.2f}% FS {wf:.2f}%)"
+                    f"  <->  训练集节点 {b_node} (综合rel%%={bc:.2f}, YS {by:.2f}% FS {bf:.2f}%)"
+                )
+                print(f"      → 节点 {w_node} 进入训练集，节点 {b_node} 进入验证集")
+
+    tr_b, va_b, in_b, n_b = counts_before
+    tr_a, va_a, in_a, n_a = counts_after
+    print(
+        f"  划分统计: train {tr_b}→{tr_a}  val {va_b}→{va_a}  垃圾库(inactive) {in_b}→{in_a}  (总节点 {n_b})"
+    )
+    if lt10_saved:
+        print(
+            "  条件存档: 已保存本轮 mask 至 mask_val_lt10/round_NNNNNN/ "
+            "（train_mask.pt, val_mask.pt, summary.json）"
+        )
+    print(f"  耗时: {elapsed_sec:.1f}s")
+    print(f"{bar}\n")
 
 
 def _load_model_from_checkpoint(
@@ -337,7 +446,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--max-curate",
         type=int,
-        default=60,
+        default=50,
         help="Rounds 1..N: curate (worst val -> inactive, best train -> val). Rounds N+1..: swap val/train pair.",
     )
     p.add_argument("--max-rounds", type=int, default=0, help="0 = infinite until Ctrl+C.")
@@ -369,6 +478,26 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable per-round mask snapshot files.",
     )
+    p.add_argument(
+        "--save-mask-lt10-dir",
+        type=Path,
+        default=None,
+        help=(
+            "When val_worst_rel_pct for YS and FS are both below --save-mask-rel-threshold, "
+            "save train/val masks under out-dir/mask_val_lt10/round_NNNNNN/ before curate/swap."
+        ),
+    )
+    p.add_argument(
+        "--save-mask-rel-threshold",
+        type=float,
+        default=10.0,
+        help="Relative-error %% threshold; YS and FS worst val %% must both be strictly below this.",
+    )
+    p.add_argument(
+        "--no-save-mask-lt10",
+        action="store_true",
+        help="Disable conditional mask save on dual val-worst rel%% threshold.",
+    )
     return p.parse_args()
 
 
@@ -390,6 +519,14 @@ def main() -> None:
             if args.mask_history_dir is not None
             else out_dir / "mask_round_history"
         )
+    save_lt10_dir: Path | None = None
+    if not args.no_save_mask_lt10:
+        save_lt10_dir = (
+            Path(args.save_mask_lt10_dir).resolve()
+            if args.save_mask_lt10_dir is not None
+            else out_dir / "mask_val_lt10"
+        )
+    rel_threshold = float(args.save_mask_rel_threshold)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ckpt_path = out_dir / BEST_CKPT_NAME
@@ -418,6 +555,10 @@ def main() -> None:
     )
     print(f"[INIT] state_path={state_path} history_csv={history_csv}")
     print(f"[INIT] mask_history_dir={mask_hist_dir if mask_hist_dir is not None else '(disabled)'}")
+    print(
+        f"[INIT] save_mask_lt10_dir={save_lt10_dir if save_lt10_dir is not None else '(disabled)'} "
+        f"rel_threshold={rel_threshold}"
+    )
 
     round_idx = int(state.get("last_round", 0))
 
@@ -518,14 +659,12 @@ def main() -> None:
                 or epoch == int(args.epochs_per_round)
             ):
                 print(
-                    f"epoch={epoch} train_l1_ys={loss_ys.item():.6f} train_l1_fs={loss_fs.item():.6f} "
-                    f"train_mae=[{train_mae_ys:.6f},{train_mae_fs:.6f}] "
-                    f"val_mae=[{val_mae_ys:.6f},{val_mae_fs:.6f}] "
-                    f"val_half_rel_pct=[{val_half_pair[0]:.2f},{val_half_pair[1]:.2f}] "
-                    f"val_worst_rel_pct=[{val_worst_pair[0]:.2f},{val_worst_pair[1]:.2f}] "
-                    f"val_worst_node_idx={val_worst_node_idx} "
-                    f"\n\t ---- val_last_lt10_sorted_numb={val_last_lt10_sorted_numb} -----\n\t"
-                    f"val_score={val_score:.6f} best_val_score={best_val_score:.6f} best_epoch={best_epoch}"
+                    f"  [R{round_idx} ep{epoch:4d}] "
+                    f"L1_ys={loss_ys.item():.5f} L1_fs={loss_fs.item():.5f} | "
+                    f"val_MAE YS/FS={val_mae_ys:.5f}/{val_mae_fs:.5f} | "
+                    f"val_worst%% YS/FS={val_worst_pair[0]:.2f}/{val_worst_pair[1]:.2f} | "
+                    f"val双<10%% n={val_last_lt10_sorted_numb} | "
+                    f"score={val_score:.5f} best={best_val_score:.5f}@{best_epoch}"
                 )
 
         model.eval()
@@ -561,12 +700,6 @@ def main() -> None:
         mask_op = "curate" if use_curate else "exchange"
         k_req = max(1, int(args.swap_batch_size))
 
-        if k_eff < k_req:
-            print(
-                f"[ROUND {round_idx}] batch clipped: requested swap_batch_size={k_req} "
-                f"effective_k={k_eff} (min of val/train pool)"
-            )
-
         if use_curate and int(train_mask.sum()) < k_eff + 1:
             raise RuntimeError(
                 "curate needs train_count >= effective_k+1 after batch (train must stay non-empty); "
@@ -578,32 +711,34 @@ def main() -> None:
         worst_nodes_str = "|".join(map(str, worst_nodes))
         best_nodes_str = "|".join(map(str, best_nodes))
 
-        _post_common = (
-            f"[ROUND {round_idx}] post_train mode={mask_op} "
-            f"train_mae=[{train_mae_ys:.6f},{train_mae_fs:.6f}] "
-            f"val_mae=[{val_mae_ys:.6f},{val_mae_fs:.6f}] "
-            f"val_last_lt10_sorted_numb={val_last_lt10_sorted_numb} "
-            f"batch_k={k_req} effective_k={k_eff} "
-        )
-        if use_curate:
-            print(
-                f"{_post_common}"
-                f"drop_val_worst_ids={_fmt_id_list(worst_nodes)} "
-                f"(combined_rel%% head {worst_pcts[0]:.2f}..{worst_pcts[-1]:.2f}) "
-                f"promote_to_val_ids={_fmt_id_list(best_nodes)} "
-                f"(combined_rel%% head {best_pcts[0]:.2f}..{best_pcts[-1]:.2f}) phase={phase}"
-            )
-        else:
-            print(
-                f"{_post_common}"
-                f"swap worst_val_ids={_fmt_id_list(worst_nodes)} "
-                f"(combined_rel%% head {worst_pcts[0]:.2f}..{worst_pcts[-1]:.2f}) "
-                f"<-> best_train_ids={_fmt_id_list(best_nodes)} "
-                f"(combined_rel%% head {best_pcts[0]:.2f}..{best_pcts[-1]:.2f}) phase={phase}"
-            )
-
+        counts_before = _mask_split_counts(train_mask, val_mask)
         train_during = train_mask.detach().cpu().bool().clone()
         val_during = val_mask.detach().cpu().bool().clone()
+        lt10_saved = False
+
+        if save_lt10_dir is not None:
+            worst_ys, worst_fs = float(_worst_p[0]), float(_worst_p[1])
+            if worst_ys < rel_threshold and worst_fs < rel_threshold:
+                lt10_round_dir = save_conditional_mask_pair(
+                    save_lt10_dir,
+                    round_idx,
+                    train_during,
+                    val_during,
+                    meta={
+                        "val_worst_rel_pct_ys": worst_ys,
+                        "val_worst_rel_pct_fs": worst_fs,
+                        "val_mae_ys": float(val_mae_ys),
+                        "val_mae_fs": float(val_mae_fs),
+                        "rel_threshold": rel_threshold,
+                        "data_dir": str(data_dir),
+                        "phase": phase,
+                    },
+                )
+                lt10_saved = True
+                print(
+                    f"  [ROUND {round_idx}] 条件存档 -> {lt10_round_dir} "
+                    f"(worst_ys={worst_ys:.4f}% worst_fs={worst_fs:.4f}%)"
+                )
 
         if use_curate:
             _apply_mask_curate_batch(train_mask, val_mask, worst_nodes, best_nodes)
@@ -635,7 +770,33 @@ def main() -> None:
                     "data_dir": str(data_dir),
                 },
             )
-            print(f"[ROUND {round_idx}] mask snapshot -> {snap_path}")
+            print(f"  [ROUND {round_idx}] mask 快照 -> {snap_path}")
+
+        counts_after = _mask_split_counts(train_mask_cpu, val_mask_cpu)
+        _print_round_end_summary(
+            round_idx=round_idx,
+            use_curate=use_curate,
+            max_curate=int(args.max_curate),
+            k_req=k_req,
+            k_eff=k_eff,
+            worst_nodes=worst_nodes,
+            best_nodes=best_nodes,
+            pred_ys=pred_ys,
+            pred_fs=pred_fs,
+            ys=ys,
+            fs=fs,
+            train_mae_ys=train_mae_ys,
+            train_mae_fs=train_mae_fs,
+            val_mae_ys=val_mae_ys,
+            val_mae_fs=val_mae_fs,
+            val_worst_pair=list(_worst_p),
+            val_half_pair=list(_half_p),
+            val_last_lt10_n=val_last_lt10_sorted_numb,
+            counts_before=counts_before,
+            counts_after=counts_after,
+            lt10_saved=lt10_saved,
+            elapsed_sec=time.time() - t_round,
+        )
 
         state["total_swaps"] = int(state.get("total_swaps", 0)) + 1
         state["last_round"] = round_idx
@@ -673,7 +834,10 @@ def main() -> None:
                 f"{time.time() - t_round:.4f}",
             ],
         )
-        print(f"[ROUND {round_idx}] saved masks + state; logged {history_csv}")
+        print(
+            f"  [ROUND {round_idx}] 已写入 {data_dir}/train_mask.pt, val_mask.pt | "
+            f"state={state_path.name} history={history_csv.name}"
+        )
 
 
 if __name__ == "__main__":

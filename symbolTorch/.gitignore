@@ -1,0 +1,12 @@
+# PySR / SymTorch caches and large artifacts
+**/sr_cache/
+**/SR_output/
+*.pt
+!**/.gitkeep
+
+# Keep human-readable exports
+!**/*_sym.json
+!**/metrics.json
+!**/summary.md
+!**/*_formula.json
+!**/*_formula.txt

@@ -1,0 +1,18 @@
+{
+  "experiment": "lowExp",
+  "graph_at_inference": false,
+  "teacher": {
+    "train_mae_ys": 0.5291206240653992,
+    "train_mae_fs": 0.8469770550727844,
+    "val_mae_ys": 0.585630476474762,
+    "val_mae_fs": 0.8718855381011963
+  },
+  "tabular_symbolic": {
+    "train_mae_ys": 0.5291012525558472,
+    "train_mae_fs": 0.8477849364280701,
+    "val_mae_ys": 0.5841293931007385,
+    "val_mae_fs": 0.8759000897407532
+  },
+  "graph_info_loss_val_mae_ys": -0.0015010833740234375,
+  "graph_info_loss_val_mae_fs": 0.004014551639556885
+}
