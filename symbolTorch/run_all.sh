@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Run all four symbolTorch distillation experiments.
+# 初学者：一键按顺序跑 highExp → medExp → lowExp → sampleExp
+# 第一次请先单独跑：  python3.13 lowExp/run_distill.py --quick
+# 自检：            python3.13 scripts/check_env.py
+# 教程：            阅读 README.md
 set -euo pipefail
 
 PY="${PYTHON:-/root/miniconda3/bin/python3.13}"
