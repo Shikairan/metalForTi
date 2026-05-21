@@ -106,6 +106,7 @@ def build_summary_dict(
         "ti_balance_true_mean": float(ti_true.mean().item()),
         "element_sum_inv_mean": float(elem_sum_inv.mean().item()),
         "element_sum_inv_max": float(elem_sum_inv.max().item()),
+        "element_sum_true_mean": float(elem_sum_true.mean().item()),
         "field_descriptions": FIELD_DESCRIPTIONS_CN,
     }
 
