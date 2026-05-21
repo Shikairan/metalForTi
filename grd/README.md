@@ -1,43 +1,25 @@
 # grd：GNN 全特征梯度反推
 
-基于 **已训练** 的 `SingleEncoder_DualRGAT`（`gnnDir/gnn/r-gatDouble`），对图中每个节点的 **30 维输入特征** 做梯度反推，使模型预测的 **YS / FS** 逼近给定目标。  
-默认用真实标签做 **还原验证**；也可指定目标性能做 **设计反推**。
+基于 **已训练** 的 `SingleEncoder_DualRGAT`（`gnnDir/gnn/r-gatDouble`），对图中每个节点的 **30 维输入特征** 做梯度反推，使模型预测的 **YS / FS** 逼近给定目标。
 
 ---
 
-## 目录
+## 文档导航
 
-- [背景与问题定义](#背景与问题定义)
-- [特征布局（30 维）](#特征布局30-维)
-- [目录结构](#目录结构)
-- [工作流程](#工作流程)
-- [快速开始](#快速开始)
-- [命令行参数](#命令行参数)
-- [输出文件](#输出文件)
-- [模块说明](#模块说明)
-- [Python API 示例](#python-api-示例)
-- [依赖与环境](#依赖与环境)
-- [常见问题](#常见问题)
+| 文档 | 说明 |
+|------|------|
+| **本文** | 总览、**算法原理**、参考文献、快速开始 |
+| [docs/README.md](./docs/README.md) | **各 Python 文件** 的独立说明索引 |
 
----
-
-## 背景与问题定义
-
-正向模型（已训练、参数冻结）：
-
-```text
-x (N, 30)  +  edge_index, edge_type  →  GNN  →  ys_pred, fs_pred  (N,)
-```
-
-反推问题：固定 GNN 权重，优化 **全图** 的 `x`，最小化
-
-```text
-MSE(ys_pred, target_ys) + MSE(fs_pred, target_fs) + 正则项
-```
-
-并在每步（或按间隔）将 `x` **硬投影** 到物理可行域（组分非负、Ti 余量、testenv/coldway 上下界等）。
-
-> **图耦合**：RGAT 消息传递使所有节点特征在梯度上相互影响；优化变量仍是全图 `x`，即使重建损失只算 `val` 子集（`--recon-mask-mode val`），训练节点的 `x` 仍会间接影响验证节点预测。
+| 源文件 | 独立 README |
+|--------|-------------|
+| `__init__.py` | [docs/__init__.md](./docs/__init__.md) |
+| `io_utils.py` | [docs/io_utils.md](./docs/io_utils.md) |
+| `feature_layout.py` | [docs/feature_layout.md](./docs/feature_layout.md) |
+| `masked_projector.py` | [docs/masked_projector.md](./docs/masked_projector.md) |
+| `gnn_inverter.py` | [docs/gnn_inverter.md](./docs/gnn_inverter.md) |
+| `run_inversion.py` | [docs/run_inversion.md](./docs/run_inversion.md) |
+| `summary_report.py` | [docs/summary_report.md](./docs/summary_report.md) |
 
 ---
 
@@ -45,83 +27,182 @@ MSE(ys_pred, target_ys) + MSE(fs_pred, target_fs) + 正则项
 
 与 `gnnDir/gnndataPT/r-gatPT/material_graph.pt` 中 `sample.x` **完全一致**。
 
-| 维段 | 索引 | 列含义 | 反推约束 | 说明 |
-|------|------|--------|----------|------|
-| element | 0–9 | Al, Zr, Sn, Mo, Cr, Nb, Si, V, Ta, Fe | **A 模式** `ti_balance` | wt% 量级；非负；行和 ≤ `total_wt`（默认 100） |
-| testenv | 10–11 | tem, fcr | 训练分位数 **box** | **z-score**，与训练一致；物理还原用 `testenv_stats.csv` |
-| coldway | 12–29 | 18 维工艺特征 | 训练分位数 **box** | 与 `build_datagnn` 变换后空间一致 |
+| 维段 | 索引 | 约束 |
+|------|------|------|
+| element | 0–9 | **A 模式**：非负，行和 ≤ 100 wt%；`Ti = 100 − sum`（见 `ti_balance_*`） |
+| testenv | 10–11 | 训练分位数 box（**z-score**） |
+| coldway | 12–29 | 训练分位数 box |
 
-### 钛余量 A 模式
-
-Ti **不在** 30 维向量内，由后处理计算：
-
-```text
-Ti(wt%) = total_wt - sum(element_0..9)    # 默认 total_wt = 100
-```
-
-结果写入 `x_inv.pt` 的 `ti_balance_inv` / `ti_balance_true`。
+元素列：`Al, Zr, Sn, Mo, Cr, Nb, Si, V, Ta, Fe`。详见 [docs/feature_layout.md](./docs/feature_layout.md)。
 
 ---
 
-## 目录结构
+## 算法原理
 
-```text
-grd/
-├── __init__.py           # 包导出
-├── io_utils.py           # 加载 PT 数据、合并异质边、加载 checkpoint
-├── feature_layout.py     # 30 维布局、分位数 box、Ti 计算、默认投影器
-├── masked_projector.py   # 按维段硬投影（element / testenv / coldway）
-├── gnn_inverter.py       # 核心优化器：正则、投影、多初始点、Benchmark
-├── run_inversion.py      # 命令行入口（推荐）
-├── summary_report.py     # 生成 inversion_summary.json / .txt
-├── outputs/              # 默认输出目录（.gitignore 可忽略大文件）
-└── README.md             # 本文档
-```
+本节说明 `grd` 在数学上在做什么、与常见机器学习/优化文献的对应关系，以及为何采用当前工程实现。
 
----
+### 1. 问题类型：冻结神经网络下的输入反演
 
-## 工作流程
+正向模型 \(f_\theta\) 为已训练的 GNN（参数 \(\theta\) 固定），输入为全图特征矩阵 \(X \in \mathbb{R}^{N \times d}\)，输出节点级标量 \(y, z\)（YS、FS）：
+
+\[
+\hat{y}, \hat{z} = f_\theta(X;\, \mathcal{G})
+\]
+
+其中 \(\mathcal{G}=(V,E)\) 为材料相似度图（约 604 节点、\(10^5\) 量级边）。反演问题：求 \(X\) 使得 \(\hat{y}, \hat{z}\) 接近目标 \(y^\*, z^\*\)：
+
+\[
+\min_{X}\; \mathcal{L}(X)
+= \underbrace{\|f_y(X)-y^\*\|^2 + \|f_z(X)-z^\*\|^2}_{\text{重建项}}
++ \underbrace{\sum_k \lambda_k \mathcal{R}_k(X)}_{\text{正则项}}
+\quad
+\text{s.t.}\quad X \in \mathcal{C}
+\]
+
+- **重建项**：对 MSE 在节点子集 \(\mathcal{M}\) 上求平均（`recon_mask`；默认全图）。
+- **正则项**：先验与光滑性（见下）。
+- **可行集 \(\mathcal{C}\)**：由 `MaskedCompositeProjector` 实现，分段 box + 钛合金组分约束。
+
+这在文献中接近 **model inversion / input reconstruction from a fixed surrogate model**：用可微代理模型（此处为 GNN）反求输入，常见于可解释性、对抗样本与 **inverse design** 范式。与经典 **逆问题（inverse problems）** 中「从观测反演参数」结构相同，但这里观测是 YS/FS、参数是材料与工艺特征。
+
+**不适定性（ill-posedness）**：不同 \(X\) 可能对应相近输出；解不唯一。因此需要正则、锚定与 **多初始点（multistart）**。
 
 ```mermaid
-flowchart LR
-  A[加载 material_graph<br/>ys/fs/mask] --> B[加载 best_ysfs_gat.pt]
-  B --> C[构建 MaskedCompositeProjector<br/>+ 正则器]
-  C --> D[多初始点 invert_multistart]
-  D --> E[保存 x_inv.pt]
-  E --> F[summary JSON/TXT]
+flowchart TB
+  subgraph forward["正向（已训练，冻结 θ）"]
+    X["X (N×30)"] --> GNN["f_θ : RGAT"]
+    GNN --> Y["ŷ, ẑ"]
+  end
+  subgraph inverse["反推（优化 X）"]
+    L["L = MSE(ŷ,ŷ*) + MSE(ẑ,ẑ*) + R(X)"]
+    L --> Grad["∇_X L via autograd"]
+    Grad --> Step["Adam / LBFGS"]
+    Step --> Proj["Π_C(X) 硬投影"]
+    Proj --> X
+  end
+  Y -.-> L
 ```
 
-1. `io_utils.load_graph_bundle`：读 `x, ys, fs, train_mask, val_mask`
-2. `io_utils.merge_hetero_edges`：`comp_sim/env_sim/heat_sim` → `edge_index`, `edge_type`
-3. `feature_layout.bounds_from_train_x`：testenv/coldway 训练分位数 box
-4. `GNNInverter.invert_multistart`：Adam 优化 + 投影 + 早停
-5. `summary_report`：汇总指标与中文说明
+### 2. 优化算法：Adam 与 L-BFGS + 投影
+
+#### 2.1 投影梯度法（Projected Gradient / Projected Quasi-Newton）
+
+约束 \(X \in \mathcal{C}\) 通过 **投影** 满足，而非增广拉格朗日内层迭代：
+
+\[
+X_{t+1} = \Pi_{\mathcal{C}}\bigl( X_t - \eta_t \nabla_X \mathcal{L}(X_t) \bigr)
+\]
+
+- **Adam**（默认）：自适应步长的一阶方法，实现见 `GNNInverter.invert_single` 的 Adam 分支；每 `projection_interval` 步执行 \(\Pi_{\mathcal{C}}\)。
+- **L-BFGS**（可选）：有限内存拟牛顿法，适合光滑或近似光滑问题；本实现在 **closure 前/后** 投影，且 **不在 closure 内做梯度裁剪**，以免破坏曲率对 \((s_k, y_k)\) 的估计（见代码注释 Fix-3/4）。
+
+投影梯度法是非线性规划经典框架，参见 Bertsekas, *Nonlinear Programming*（第2版）第2章约束梯度方法。
+
+#### 2.2 多初始点全局启发
+
+`invert_multistart` 对多种 `Initializer` 各跑 `invert_single`，取 **验证重建 MSE 最小** 的解。这是应对非凸 \( \mathcal{L} \) 的 **multi-start 启发式**，不保证全局最优。
+
+### 3. 正则项及其含义
+
+| 正则 | 数学形式（示意） | 作用 |
+|------|------------------|------|
+| **图平滑** `SmoothnessRegularizer` | \(\sum_{(i,j)\in E_0} \|X_i - X_j\|_2^2\) | 仅在 **comp_sim** 边（`edge_type=0`）上惩罚，使组分在相似材料间平滑；避免 env/heat 边误约束 |
+| **锚定** `AnchorRegularizer` | \(\|X - X_{\text{train}}\|_F^2\) | Tikhonov 型先验，拉回训练流形 |
+| **L1** `SparsityRegularizer` | \(\|X\|_1\) | 默认权重极小；若启用应限定列（避免 wt% 被错误稀疏化） |
+| **软物理** `PhysicalPenaltyRegularizer` | \(\mathrm{ReLU}(-X)^2 + (\mathbf{1}^\top X - 1)^2\) | 联合反推时默认 **关闭**（`lambda=0`），由硬投影代替 |
+
+图平滑与 **图信号处理** 中的图拉普拉斯正则 \(X^\top L X\) 同类，见 Shuman et al., *IEEE Signal Processing Magazine*, 2013。
+
+### 4. 硬约束与可行集 \(\mathcal{C}\)
+
+#### 4.1 钛合金组分（A 模式，`ti_balance`）
+
+对每行 \(x^{(e)} \in \mathbb{R}^{10}\)（Al…Fe）：
+
+\[
+x^{(e)} \ge 0,\quad \mathbf{1}^\top x^{(e)} \le T_{\text{total}}\ (=100\ \text{wt\%})
+\]
+
+若超过总量则整行等比缩放。**钛 Ti 不在向量内**：
+
+\[
+\text{Ti} = T_{\text{total}} - \mathbf{1}^\top x^{(e)}
+\]
+
+这是质量守恒在「只优化合金化元素」时的显式余量写法。
+
+#### 4.2 testenv / coldway（box）
+
+\[
+x_j \in [l_j, u_j]
+\]
+
+界由训练集分位数估计（`bounds_from_train_x`），可选物理 tem/fcr 经 `testenv_stats.csv` 换到 z 空间。
+
+#### 4.3 概率单纯形投影（`SimplexProjector`）
+
+对需要 **行和为 1 且非负** 的子向量，使用 Duchi et al. 的 **欧氏投影到单纯形** 算法（排序法，\(O(d\log d)\)）。本仓库默认组分用 `ti_balance` 而非单纯形，但 `gnn_inverter` 仍保留 `SimplexProjector` 供 Benchmark/实验。
+
+### 5. 正向 GNN：关系图注意力
+
+`SingleEncoder_DualRGAT` 在共享编码后使用 **RGATConv**（关系类型 `edge_type`）做消息传递，再分 YS/FS 两头回归。
+
+- **GAT**：在邻域上做注意力加权聚合（Veličković et al., ICLR 2018）。
+- **R-GCN**：在关系类型上分解卷积（Schlichtkrull et al., ESWC 2018）；RGAT 可视为关系条件下的注意力扩展。
+
+反推时 \(\nabla_X \mathcal{L}\) 经 **整条计算图** 回传，包括所有 RGAT 层；图耦合使 **任意节点** 的 \(X_i\) 都会影响多跳邻居的 \(\hat{y}, \hat{z}\)。
+
+### 6. 验证集重建掩码（`recon_mask`）
+
+`--recon-mask-mode val` 时，MSE 只在验证节点上计算，用于减轻「用训练标签监督全图反推」的信息泄露风险。  
+但因 GNN 消息传递，**训练节点的 \(X\) 仍会参与前向并影响验证节点预测**，故不能等同于「只反推验证节点」的完全隔离。
+
+---
+
+## 参考文献与链接
+
+以下按主题列出可直接访问的论文/书籍页面（建议引用以出版社或 arXiv 正式版本为准）。
+
+### 优化与投影
+
+| 主题 | 文献 | 链接 |
+|------|------|------|
+| 投影梯度 / 约束优化 | Bertsekas, D. P. *Nonlinear Programming*, Athena Scientific, 1999, Ch.2 | https://web.mit.edu/dimitrib/www/ |
+| 单纯形欧氏投影 | Duchi, J. et al. "Efficient Projections onto the \(\ell_1\)-Ball…", *JMLR* 9:2345–2365, 2008 | https://jmlr.org/papers/v9/duchi08a.html |
+| Adam | Kingma, D. P. & Ba, J. "Adam…", *ICLR* 2015 | https://arxiv.org/abs/1412.6980 |
+| L-BFGS | Liu, D. C. & Nocedal, J. "On the Limited Memory BFGS Method…", *Mathematical Programming* 45:503–528, 1989 | https://doi.org/10.1007/BF01587477 |
+
+### 图神经网络（正向模型）
+
+| 主题 | 文献 | 链接 |
+|------|------|------|
+| Graph Attention Networks (GAT) | Veličković, P. et al. *ICLR* 2018 | https://arxiv.org/abs/1710.10903 |
+| Relational GCN (R-GCN) | Schlichtkrull, M. et al. *ESWC* 2018 | https://arxiv.org/abs/1703.06103 |
+| 图信号处理 / 图拉普拉斯正则 | Shuman, D. I. et al. "The Emerging Field of Signal Processing on Graphs", *IEEE SPM* 2013 | https://arxiv.org/abs/1211.0053 |
+
+### 反演、逆问题与神经网络反求输入
+
+| 主题 | 文献 | 链接 |
+|------|------|------|
+| 逆问题与 Tikhonov 正则 | Hansen, P. C. *Discrete Inverse Problems: Insight and Algorithms*, SIAM, 2010 | https://doi.org/10.1137/1.9780898718836 |
+| 深度学习逆问题综述 | Arridge, P. et al. "Solving inverse problems using data-driven models", *Acta Numerica* 28, 2019 | https://doi.org/10.1017/S0962492919000059 |
+| 模型反演（隐私/攻击语境，思想相近） | Fredrikson, M. et al. "Model Inversion Attacks…", *CCS* 2015 | https://doi.org/10.1145/2810103.2813677 |
+| 可微代理 + 梯度优化设计（材料/物理设计常见范式） | Ren, S. et al. "Inverse molecular design using machine learning", *Science Advances* 4:eaap7885, 2018（示例：梯度驱动设计） | https://doi.org/10.1126/sciadv.aap7885 |
+
+### 本仓库数据流水线（非反推算法，便于溯源）
+
+| 主题 | 位置 |
+|------|------|
+| datagnn 构图与特征 | `gnnDir/build_datagnn.py`, `gnnDir/rgcn_dataloader.py` |
+| DualRGAT 训练 | `gnnDir/gnn/r-gatDouble/train_fs_gat.py` |
 
 ---
 
 ## 快速开始
 
-### 1. 环境
-
 ```bash
-# 参考 gnnDir/requirements.txt
-pip install torch torch-geometric pandas numpy
-```
+git pull origin meta4TiiGnn
 
-### 2. 数据与模型（仓库默认路径）
-
-| 资源 | 路径 |
-|------|------|
-| 图数据包 | `gnnDir/gnndataPT/r-gatPT/` |
-| 检查点 | `gnnDir/gnn/r-gatDouble/runs/best_ysfs_gat.pt` |
-| 模型定义 | `gnnDir/gnn/r-gatDouble/model_gat_double.py` |
-| testenv 统计 | `gnnDir/datacsv/testenv_stats.csv` |
-
-### 3. 运行反推（推荐 GPU）
-
-在**仓库根目录**执行：
-
-```bash
 python -m grd.run_inversion \
   --data-dir gnnDir/gnndataPT/r-gatPT \
   --ckpt gnnDir/gnn/r-gatDouble/runs/best_ysfs_gat.pt \
@@ -129,251 +210,43 @@ python -m grd.run_inversion \
   --out-dir grd/outputs
 ```
 
-### 4. 本地同步远端分支
-
-```bash
-git fetch origin meta4TiiGnn
-git checkout meta4TiiGnn
-git pull origin meta4TiiGnn
-```
-
----
-
-## 命令行参数
-
-| 参数 | 默认 | 说明 |
-|------|------|------|
-| `--data-dir` | `gnnDir/gnndataPT/r-gatPT` | PT 数据目录 |
-| `--ckpt` | `.../best_ysfs_gat.pt` | 模型权重 |
-| `--rgat-dir` | `.../r-gatDouble` | 含 `model_gat_double.py` 的目录 |
-| `--out-dir` | `grd/outputs` | 输出目录 |
-| `--device` | `cuda`（不可用则 cpu） | 计算设备 |
-| `--force-cpu` | 关 | 强制 CPU；默认仅 `training_mean` 初始化 |
-| `--total-wt` | `100` | Ti A 模式总量标尺（wt%） |
-| `--target-mode` | `ground_truth` | `ground_truth` 或 `model_forward` |
-| `--recon-mask-mode` | `none` | 重建损失节点范围：`none` / `val` / `train` |
-| `--node-mask` | `val` | **评估**特征 MAE 的节点子集（不影响优化范围） |
-| `--max-iters` | `1500` | 最大迭代步数 |
-| `--lr` | `0.05` | Adam 学习率 |
-| `--lambda-smooth` | `0.08` | 图平滑正则（仅 `comp_sim` 边，关系 id=0） |
-| `--lambda-anchor` | `0.15` | L2 锚定到训练 `x` |
-| `--patience` | `200` | 早停耐心值 |
-| `--recon-tol` | `1e-5` | 重建 MSE 容限 |
-| `--margin` | `0.05` | 训练分位数 box 外扩比例 |
-| `--tem-lower/upper` | 无 | 物理温度界（需 `testenv_stats.csv` 转 z） |
-| `--fcr-lower/upper` | 无 | 物理 fcr 界 |
-| `--inits` | 空（全部） | 逗号分隔：`training_mean,dirichlet,random_normal,zero` |
-| `--seed` | `42` | 随机种子 |
-
-**示例：仅在验证集节点上算重建损失（减轻标签泄露风险）**
-
-```bash
-python -m grd.run_inversion \
-  --recon-mask-mode val \
-  --target-mode ground_truth
-```
-
-**示例：指定物理温度上下界（反推仍在 z-score 空间）**
-
-```bash
-python -m grd.run_inversion \
-  --tem-lower 25 --tem-upper 600 \
-  --testenv-stats gnnDir/datacsv/testenv_stats.csv
-```
+- GPU：默认 `--device cuda`
+- CPU：`--force-cpu --inits training_mean`（可能 OOM）
+- 详见 [docs/run_inversion.md](./docs/run_inversion.md)
 
 ---
 
 ## 输出文件
 
-| 文件 | 内容 |
+| 文件 | 说明 |
 |------|------|
-| `x_inv.pt` | 主结果：`x_inv`, `x_true`, `ti_balance_*`, `ys_pred`, `fs_pred`, `bounds` 等 |
-| `inversion_summary.json` | 指标汇总 + `field_descriptions` 各字段中文说明 |
-| `inversion_summary.txt` | 人类可读报告，每项带中文解释 |
+| `outputs/x_inv.pt` | `x_inv`、`ti_balance_*`、预测与界等 |
+| `outputs/inversion_summary.json` | 指标 + `field_descriptions` |
+| `outputs/inversion_summary.txt` | 中文可读报告 |
 
-### `x_inv.pt` 主要字段
+详见 [docs/summary_report.md](./docs/summary_report.md)。
 
-| 键 | 形状 | 说明 |
-|----|------|------|
-| `x_inv` | (N, 30) | 反推特征，与 `material_graph` 同格式 |
-| `x_true` | (N, 30) | 原始真值 |
-| `ti_balance_inv` | (N,) | Ti(wt%) = total_wt - sum(元素) |
-| `ti_balance_true` | (N,) | 真值对应的 Ti |
-| `target_ys`, `target_fs` | (N,) | 反推目标 |
-| `ys_pred`, `fs_pred` | (N,) | 用 `x_inv` 前向得到 |
-| `element_names` | 10 | 元素名列表 |
+---
 
-加载示例：
+## 依赖
 
-```python
-import torch
-d = torch.load("grd/outputs/x_inv.pt", map_location="cpu", weights_only=False)
-x_inv = d["x_inv"]
-ti = d["ti_balance_inv"]
+`torch`, `torch-geometric`, `pandas`, `numpy`（见 `gnnDir/requirements.txt`）。  
+全图 RGAT 反传 **强烈建议 GPU（≥16GB 显存）**。
+
+---
+
+## 目录结构
+
+```text
+grd/
+├── __init__.py
+├── io_utils.py
+├── feature_layout.py
+├── masked_projector.py
+├── gnn_inverter.py      # 核心优化
+├── run_inversion.py     # CLI
+├── summary_report.py
+├── docs/                # 各模块独立 README
+├── outputs/
+└── README.md            # 本文
 ```
-
----
-
-## 模块说明
-
-### `io_utils.py`
-
-| 函数 | 作用 |
-|------|------|
-| `_ensure_rgat_double_on_path` | 将 r-gatDouble 加入 `sys.path` |
-| `load_graph_bundle` | 加载 `x, ys, fs, train_mask, val_mask` |
-| `merge_hetero_edges` | 异质边合并为 `edge_index` + `edge_type` |
-| `load_dual_rgat` | 加载 `SingleEncoder_DualRGAT` 并 `eval()` |
-
-### `feature_layout.py`
-
-| 符号 / 函数 | 作用 |
-|-------------|------|
-| `ELEMENT_DIM`, `INPUT_DIM`, `ELEMENT_NAMES` | 维段常量 |
-| `compute_ti_balance` | 计算 Ti 余量 (N,) |
-| `bounds_from_train_x` | 训练集分位数 box |
-| `bounds_with_physical_testenv` | 物理 tem/fcr → z-score 界 |
-| `build_projector` | 默认 `MaskedCompositeProjector` |
-
-### `masked_projector.py`
-
-| 类 / 函数 | 作用 |
-|-----------|------|
-| `FeatureSliceSpec` | 一段特征的投影类型与界 |
-| `_project_ti_balance_rows` | 元素非负 + 行和 ≤ total_wt |
-| `MaskedCompositeProjector` | 对 30 维按段依次投影 |
-
-投影类型：`ti_balance` | `box` | `simplex` | `scaled_simplex` | `nonnegative` | `none`
-
-### `gnn_inverter.py`（核心）
-
-| 类 | 作用 |
-|----|------|
-| `GNNInverterConfig` | 优化器、正则权重、投影、早停等超参 |
-| `SmoothnessRegularizer` | 图平滑（可限 `target_edge_types`，默认仅组分边 0） |
-| `SparsityRegularizer` | L1 稀疏（默认权重极小） |
-| `AnchorRegularizer` | L2 锚定到训练 `x` |
-| `PhysicalPenaltyRegularizer` | 软非负/行和惩罚（联合反推时默认权重为 0） |
-| `GNNInverter` | `invert_single` / `invert_multistart` / `_compute_loss` |
-| `GNNInversionBenchmark` | 多场景对比（可选） |
-
-要点：
-
-- **Adam**：按 `projection_interval` 做硬投影；支持 `recon_mask` 限定重建损失节点。
-- **LBFGS**：步前/步后投影；closure 内不做梯度裁剪，避免破坏曲率估计。
-- `best_x` 取优化过程中总损失最小的快照；最终指标在 `best_x` 上评估。
-
-### `run_inversion.py`
-
-命令行入口：组装数据、投影器、正则、`invert_multistart`、写三类输出。
-
-### `summary_report.py`
-
-| 函数 | 作用 |
-|------|------|
-| `build_summary_dict` | 组装 JSON 可序列化汇总 |
-| `write_summary_json` | 写 `inversion_summary.json` |
-| `write_summary_txt` | 写带中文说明的 `inversion_summary.txt` |
-
----
-
-## Python API 示例
-
-```python
-from pathlib import Path
-import torch
-
-from grd.feature_layout import bounds_from_train_x, build_projector, compute_ti_balance
-from grd.gnn_inverter import (
-    AnchorRegularizer,
-    GNNInverter,
-    GNNInverterConfig,
-    SmoothnessRegularizer,
-    TrainingMeanInitializer,
-)
-from grd.io_utils import load_dual_rgat, load_graph_bundle, merge_hetero_edges
-
-data_dir = Path("gnnDir/gnndataPT/r-gatPT")
-device = "cuda"
-
-x, ys, fs, train_mask, val_mask = load_graph_bundle(data_dir)
-graph = torch.load(data_dir / "material_graph.pt", weights_only=False)
-edge_index, edge_type = merge_hetero_edges(graph)
-edge_index, edge_type = edge_index.to(device), edge_type.to(device)
-
-model, _ = load_dual_rgat(
-    Path("gnnDir/gnn/r-gatDouble/runs/best_ysfs_gat.pt"),
-    Path("gnnDir/gnn/r-gatDouble"),
-    device,
-)
-
-bounds = bounds_from_train_x(x, train_mask)
-projector = build_projector(x, bounds, total_wt=100.0)
-
-cfg = GNNInverterConfig(
-    device=device,
-    projectors=[],
-    lambda_nonneg=0.0,
-    lambda_sum1=0.0,
-    input_dim=30,
-)
-inverter = GNNInverter(
-    model=model,
-    config=cfg,
-    regularizers=[
-        SmoothnessRegularizer(0.08, target_edge_types=[0]),
-        AnchorRegularizer(0.15),
-    ],
-    projector=projector,
-    anchor=x,
-)
-
-init = TrainingMeanInitializer(0.2).generate((x.shape[0], 30), x, device)
-result = inverter.invert_single(
-    ys.to(device), fs.to(device),
-    edge_index, edge_type,
-    init, init_name="api_demo",
-    recon_mask=val_mask.to(device),  # 可选
-)
-
-ti = compute_ti_balance(result.x_inv, 100.0)
-print(result.final_recon_mse, ti[:3])
-```
-
----
-
-## 依赖与环境
-
-- Python 3.10+
-- `torch`, `torch-geometric`, `pandas`, `numpy`（版本见 `gnnDir/requirements.txt`）
-- 全图约 **604 节点、27 万条边**，**强烈建议 NVIDIA GPU（≥16GB 显存）**
-- CPU：可用 `--force-cpu --inits training_mean --max-iters 200`，仍可能内存不足
-
----
-
-## 常见问题
-
-**Q：反推的 testenv 是物理温度吗？**  
-A：不是。`x[:, 10:12]` 为 **z-score**；物理量用 `testenv_stats.csv` 自行还原：`x_phys = z * std + mean`。
-
-**Q：为什么 element 行和不是 100？**  
-A：10 维是 **合金化元素** Al…Fe 的 wt%；Ti 余量单独在 `ti_balance_*` 里，使「元素之和 + Ti ≈ 100」。
-
-**Q：`--recon-mask-mode val` 与 `--node-mask val` 区别？**  
-A：`recon-mask-mode` 影响 **优化时的重建损失**；`node-mask` 只影响 **事后报告的特征 MAE**，不改变优化。
-
-**Q：未配置投影器会怎样？**  
-A: `GNNInverter` 会打警告；`run_inversion` 始终传入 `MaskedCompositeProjector`，一般可忽略。
-
-**Q：多初始点选哪个？**  
-A：`invert_multistart` 在全部初始点跑完后，取 **`final_recon_mse` 最小** 的一次（见 `result.init_name`）。
-
----
-
-## 版本与分支
-
-- 开发分支历史：`cursor/grd-full-inversion-d67c`（已合并入 `meta4TiiGnn`）
-- 使用模型：`SingleEncoder_DualRGAT`（`RGAT_Dual` 别名）
-- 输入维度：**30**（与当前 `datagnn` / `material_graph` 一致）
-
-如有新数据或 `in_dim` 变更，需重新训练 GNN 并同步修改 `feature_layout.INPUT_DIM` 与投影配置。
