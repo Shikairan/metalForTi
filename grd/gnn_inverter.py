@@ -58,10 +58,14 @@ class GNNInverterConfig:
 
     # 正则权重
     lambda_smooth: float = 0.05  # 图平滑正则
-    lambda_sparse: float = 1e-4  # L1 稀疏正则
+    lambda_sparse: float = 0.0   # L1 稀疏正则；对 wt% 组分特征慎用（会驱动组分归零）
     lambda_anchor: float = 0.0   # L2 锚定正则（>0 时启用）
-    lambda_nonneg: float = 1e3   # 非负软惩罚（仅在无硬投影时生效）
-    lambda_sum1: float = 1e3     # 质量和为 1 软惩罚（仅在无硬投影时生效）
+    # 软物理惩罚——仅在不使用硬约束投影器时作为后备方案。
+    # 注意：PhysicalPenaltyRegularizer 对全部 d_in 列求行和后与 sum_target 比较，
+    # 混合 wt%/z-score 特征下行和量级远大于 1，默认 0 安全；确需启用时须同步调整
+    # sum_target（如元素 wt% 段用 100，纯概率特征用 1）。
+    lambda_nonneg: float = 0.0
+    lambda_sum1: float = 0.0
 
     # 硬约束投影（每 projection_interval 步执行一次）
     projection_interval: int = 1
@@ -159,10 +163,21 @@ class SmoothnessRegularizer(Regularizer):
 
 
 class SparsityRegularizer(Regularizer):
-    """L1 稀疏正则。"""
+    """L1 稀疏正则。
 
-    def __init__(self, weight: float = 1e-4) -> None:
+    对于混合量纲特征（如 wt% 组分 + z-score），请通过 feature_cols 限制 L1 只作用于
+    语义上确实应当稀疏的维度，避免将 L1 施加在 wt% 组分列上（会错误地将非零组分驱动为零）。
+
+    feature_cols: 可选的列索引列表（或布尔掩码），限定 L1 计算范围；None 表示全列。
+    """
+
+    def __init__(
+        self,
+        weight: float = 0.0,
+        feature_cols: Optional[Union[List[int], torch.Tensor]] = None,
+    ) -> None:
         self.weight = weight
+        self.feature_cols = feature_cols
 
     def __call__(
         self,
@@ -173,7 +188,8 @@ class SparsityRegularizer(Regularizer):
     ) -> torch.Tensor:
         if self.weight == 0.0:
             return torch.tensor(0.0, device=x.device, dtype=x.dtype)
-        return self.weight * x.abs().mean()
+        target = x if self.feature_cols is None else x[:, self.feature_cols]
+        return self.weight * target.abs().mean()
 
 
 class AnchorRegularizer(Regularizer):
@@ -412,6 +428,10 @@ class GNNInverter:
 
         # 正则器
         if regularizers is None:
+            # PhysicalPenaltyRegularizer 对全部 d_in 列求行和并与 sum_target=1.0 比较。
+            # 默认 lambda_nonneg=lambda_sum1=0（不激活），避免对混合 wt%/z-score 特征
+            # 施加错误的全局行和约束。若需启用，请在 config 中显式设置权重并核对
+            # sum_target 与特征量纲一致（纯概率特征用 1，wt% 段用 100）。
             self.regularizers = [
                 SmoothnessRegularizer(config.lambda_smooth),
                 SparsityRegularizer(config.lambda_sparse),
@@ -520,9 +540,11 @@ class GNNInverter:
                     with torch.no_grad():
                         x_init.data = self.projector.project(x_init.data)
 
-                # 重新计算 recon（供日志和早停使用）
+                # 投影后重新计算总损失与 recon，确保 loss_val（早停判据）与
+                # best_x（后投影状态）始终对应同一个 x_init 快照，消除前后投影
+                # 导致的状态不一致（若未配置 projector 则直接复用 closure 返回值）。
                 with torch.no_grad():
-                    _, recon = self._compute_loss(
+                    loss, recon = self._compute_loss(
                         x_init, target_ys, target_fs, edge_index, edge_type, recon_mask
                     )
             else:
@@ -934,10 +956,10 @@ class GNNInversionBenchmark:
         # 3. 耗时对比
         ax = axes[0, 2]
         times = [comp.results[n].runtime_sec for n in names]
-        ax.bar(names, times, color=colors, edgecolor="k")
+        time_bars = ax.bar(names, times, color=colors, edgecolor="k")
         ax.set_ylabel("Time (s)")
         ax.set_title("Runtime by Scenario")
-        for bar, val in zip(bars, times):
+        for bar, val in zip(time_bars, times):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height()*1.05,
                     f"{val:.1f}s", ha="center", va="bottom", fontsize=8)
         ax.grid(True, ls="--", alpha=0.3)

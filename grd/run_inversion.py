@@ -147,6 +147,10 @@ def _build_regularizers(cfg: GNNInverterConfig) -> List:
     图平滑正则只作用于 comp_sim 边（关系 id=0），避免将 env_sim/heat_sim
     等语义不同的边混入组分特征的平滑惩罚（Fix-5）。
 
+    SparsityRegularizer 权重极小（lambda_sparse=1e-5），整体贡献可忽略。若需启用
+    有效 L1 惩罚，请通过 feature_cols 参数限定列范围（如仅作用于 coldway 段
+    [12:30]），避免对 wt% 元素组分（[0:10]）施加 L1 而将非零组分驱动归零。
+
     参数:
         cfg: GNNInverterConfig，读取 lambda_smooth/sparse/anchor。
 
