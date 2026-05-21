@@ -40,7 +40,12 @@ if not logger.handlers:
 
 @dataclass
 class GNNInverterConfig:
-    """梯度反推的全局配置。"""
+    """
+    梯度反推的全局超参数 dataclass。
+
+    控制优化器类型、学习率、正则权重、硬投影策略、多初始点与早停等；
+    传给 GNNInverter 使用。
+    """
 
     # 优化器
     optimizer: Literal["adam", "lbfgs"] = "adam"
@@ -53,17 +58,28 @@ class GNNInverterConfig:
 
     # 正则权重
     lambda_smooth: float = 0.05  # 图平滑正则
-    lambda_sparse: float = 1e-4  # L1 稀疏正则
+    lambda_sparse: float = 0.0   # L1 稀疏正则；对 wt% 组分特征慎用（会驱动组分归零）
     lambda_anchor: float = 0.0   # L2 锚定正则（>0 时启用）
-    lambda_nonneg: float = 1e3   # 非负软惩罚（仅在无硬投影时生效）
-    lambda_sum1: float = 1e3     # 质量和为 1 软惩罚（仅在无硬投影时生效）
+    # 软物理惩罚——仅在不使用硬约束投影器时作为后备方案。
+    # 注意：PhysicalPenaltyRegularizer 对全部 d_in 列求行和后与 sum_target 比较，
+    # 混合 wt%/z-score 特征下行和量级远大于 1，默认 0 安全；确需启用时须同步调整
+    # sum_target（如元素 wt% 段用 100，纯概率特征用 1）。
+    lambda_nonneg: float = 0.0
+    lambda_sum1: float = 0.0
 
-    # 硬约束投影（每 step_projection_interval 步执行）
+    # 硬约束投影（每 projection_interval 步执行一次）
     projection_interval: int = 1
-    projectors: List[str] = field(default_factory=lambda: ["simplex"])
+    # 默认空列表：物理约束复杂时建议直接传入外部 MaskedCompositeProjector；
+    # 使用 CompositeProjector 的简单场景可设为 ["nonnegative"] / ["box"]。
+    # 注意：["simplex"] 会将全部维度投影到概率单纯形（sum=1），
+    #       仅当所有特征均为比例型时才正确，混合 wt%/z-score 场景不适用。
+    projectors: List[str] = field(default_factory=list)
     # projectors 可选: "nonnegative", "simplex", "box"
     box_lower: Optional[float] = 0.0
     box_upper: Optional[float] = 1.0
+
+    # 节点输入特征维度；显式设置可避免 _infer_input_dim 从模型结构推断出错
+    input_dim: Optional[int] = None
 
     # 多初始点
     n_restarts: int = 5          # 随机重启次数
@@ -90,27 +106,53 @@ class Regularizer(ABC):
         x: torch.Tensor,
         edge_index: torch.Tensor,
         anchor: Optional[torch.Tensor] = None,
+        edge_type: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """返回正则损失（标量）。"""
         ...
 
 
 class SmoothnessRegularizer(Regularizer):
-    """图平滑正则: 鼓励邻居节点特征相似。"""
+    """图平滑正则: 鼓励邻居节点特征相似。
 
-    def __init__(self, weight: float = 0.05, aggr: Literal["mean", "sum"] = "mean") -> None:
+    target_edge_types 限制只对特定关系边施加平滑，避免将语义不同的边
+    （如 env_sim、heat_sim）错误地用于组分特征的平滑惩罚。
+    例如：传入 target_edge_types=[0] 则只作用于 comp_sim 边（关系 id=0）。
+    """
+
+    def __init__(
+        self,
+        weight: float = 0.05,
+        aggr: Literal["mean", "sum"] = "mean",
+        target_edge_types: Optional[List[int]] = None,
+    ) -> None:
         self.weight = weight
         self.aggr = aggr
+        # None 表示不过滤（作用于所有边）；提供列表则仅对指定关系类型的边计算平滑
+        self._target_types: Optional[set] = (
+            set(target_edge_types) if target_edge_types is not None else None
+        )
 
     def __call__(
         self,
         x: torch.Tensor,
         edge_index: torch.Tensor,
         anchor: Optional[torch.Tensor] = None,
+        edge_type: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if edge_index.numel() == 0 or self.weight == 0.0:
             return torch.tensor(0.0, device=x.device, dtype=x.dtype)
         src, dst = edge_index[0], edge_index[1]
+
+        # 按关系类型过滤边，避免对语义不同的异质边施加同一平滑惩罚
+        if self._target_types is not None and edge_type is not None:
+            mask = torch.zeros(edge_index.shape[1], dtype=torch.bool, device=x.device)
+            for t in self._target_types:
+                mask = mask | (edge_type == t)
+            src, dst = src[mask], dst[mask]
+            if src.numel() == 0:
+                return torch.tensor(0.0, device=x.device, dtype=x.dtype)
+
         diff = x[src] - x[dst]
         loss = diff.pow(2).sum(dim=-1)
         if self.aggr == "mean":
@@ -121,20 +163,33 @@ class SmoothnessRegularizer(Regularizer):
 
 
 class SparsityRegularizer(Regularizer):
-    """L1 稀疏正则。"""
+    """L1 稀疏正则。
 
-    def __init__(self, weight: float = 1e-4) -> None:
+    对于混合量纲特征（如 wt% 组分 + z-score），请通过 feature_cols 限制 L1 只作用于
+    语义上确实应当稀疏的维度，避免将 L1 施加在 wt% 组分列上（会错误地将非零组分驱动为零）。
+
+    feature_cols: 可选的列索引列表（或布尔掩码），限定 L1 计算范围；None 表示全列。
+    """
+
+    def __init__(
+        self,
+        weight: float = 0.0,
+        feature_cols: Optional[Union[List[int], torch.Tensor]] = None,
+    ) -> None:
         self.weight = weight
+        self.feature_cols = feature_cols
 
     def __call__(
         self,
         x: torch.Tensor,
         edge_index: torch.Tensor,
         anchor: Optional[torch.Tensor] = None,
+        edge_type: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if self.weight == 0.0:
             return torch.tensor(0.0, device=x.device, dtype=x.dtype)
-        return self.weight * x.abs().mean()
+        target = x if self.feature_cols is None else x[:, self.feature_cols]
+        return self.weight * target.abs().mean()
 
 
 class AnchorRegularizer(Regularizer):
@@ -148,6 +203,7 @@ class AnchorRegularizer(Regularizer):
         x: torch.Tensor,
         edge_index: torch.Tensor,
         anchor: Optional[torch.Tensor] = None,
+        edge_type: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if self.weight == 0.0 or anchor is None:
             return torch.tensor(0.0, device=x.device, dtype=x.dtype)
@@ -155,25 +211,37 @@ class AnchorRegularizer(Regularizer):
 
 
 class PhysicalPenaltyRegularizer(Regularizer):
-    """软物理惩罚：非负 + 质量和为 1（当不启用硬投影时的后备方案）。"""
+    """软物理惩罚：非负 + 行和等于目标值（当不启用硬投影时的后备方案）。
 
-    def __init__(self, lambda_nonneg: float = 1e3, lambda_sum1: float = 1e3) -> None:
+    注意：sum_target 应与特征的实际量纲一致：
+    - 若特征为概率/分数，sum_target=1.0；
+    - 若为 wt%（如 element 段），sum_target=100.0。
+    混用不同量纲的特征维度时，建议改用 MaskedCompositeProjector 的硬约束。
+    """
+
+    def __init__(
+        self,
+        lambda_nonneg: float = 1e3,
+        lambda_sum: float = 1e3,
+        sum_target: float = 1.0,
+    ) -> None:
         self.lambda_nonneg = lambda_nonneg
-        self.lambda_sum1 = lambda_sum1
+        self.lambda_sum = lambda_sum
+        self.sum_target = sum_target
 
     def __call__(
         self,
         x: torch.Tensor,
         edge_index: torch.Tensor,
         anchor: Optional[torch.Tensor] = None,
+        edge_type: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
         if self.lambda_nonneg > 0:
             loss = loss + self.lambda_nonneg * F.relu(-x).pow(2).mean()
-        if self.lambda_sum1 > 0:
-            # 逐节点质量和为 1
-            sum_err = (x.sum(dim=-1) - 1.0).pow(2).mean()
-            loss = loss + self.lambda_sum1 * sum_err
+        if self.lambda_sum > 0:
+            sum_err = (x.sum(dim=-1) - self.sum_target).pow(2).mean()
+            loss = loss + self.lambda_sum * sum_err
         return loss
 
 
@@ -360,11 +428,15 @@ class GNNInverter:
 
         # 正则器
         if regularizers is None:
+            # PhysicalPenaltyRegularizer 对全部 d_in 列求行和并与 sum_target=1.0 比较。
+            # 默认 lambda_nonneg=lambda_sum1=0（不激活），避免对混合 wt%/z-score 特征
+            # 施加错误的全局行和约束。若需启用，请在 config 中显式设置权重并核对
+            # sum_target 与特征量纲一致（纯概率特征用 1，wt% 段用 100）。
             self.regularizers = [
                 SmoothnessRegularizer(config.lambda_smooth),
                 SparsityRegularizer(config.lambda_sparse),
                 AnchorRegularizer(config.lambda_anchor),
-                PhysicalPenaltyRegularizer(config.lambda_nonneg, config.lambda_sum1),
+                PhysicalPenaltyRegularizer(config.lambda_nonneg, config.lambda_sum1, sum_target=1.0),
             ]
         else:
             self.regularizers = regularizers
@@ -376,6 +448,12 @@ class GNNInverter:
             )
         else:
             self.projector = projector
+
+        if self.projector is None:
+            logger.warning(
+                "未配置任何硬约束投影器（projector=None 且 config.projectors 为空）。"
+                "建议传入 MaskedCompositeProjector 以确保反推结果满足物理约束。"
+            )
 
         # 锚定点（如训练集均值）
         self.anchor = anchor.to(self.device) if anchor is not None else None
@@ -391,15 +469,21 @@ class GNNInverter:
         edge_type: torch.Tensor,
         x_init: torch.Tensor,
         init_name: str = "custom",
+        recon_mask: Optional[torch.Tensor] = None,
     ) -> InversionResult:
         """
         从单个初始点出发进行梯度反推。
+
+        recon_mask: 可选的节点布尔掩码，限定重建损失只计算指定节点（如验证集）。
+                    None 表示使用全部节点（默认）。
         """
         target_ys = target_ys.to(self.device)
         target_fs = target_fs.to(self.device)
         edge_index = edge_index.to(self.device)
         edge_type = edge_type.to(self.device)
         x_init = x_init.to(self.device).detach().clone().requires_grad_(True)
+        if recon_mask is not None:
+            recon_mask = recon_mask.to(self.device)
 
         N = target_ys.size(0)
 
@@ -408,7 +492,7 @@ class GNNInverter:
             optimizer = Adam([x_init], lr=self.cfg.lr)
             scheduler = ReduceLROnPlateau(
                 optimizer, mode="min", factor=self.cfg.lr_factor,
-                patience=self.cfg.lr_patience, verbose=False,
+                patience=self.cfg.lr_patience,
             )
         elif self.cfg.optimizer == "lbfgs":
             optimizer = LBFGS(
@@ -431,40 +515,55 @@ class GNNInverter:
         t0 = time.time()
 
         for step in range(self.cfg.max_iters):
-            # LBFGS 需要闭包
             if self.cfg.optimizer == "lbfgs":
+                # 【Fix-3】每步开始前先投影，确保 LBFGS 的 line search
+                # 始终在可行域内的点上评估梯度，以保持曲率对 (s_k, y_k) 的一致性。
+                if self.projector is not None:
+                    with torch.no_grad():
+                        x_init.data = self.projector.project(x_init.data)
+
                 def closure():
                     optimizer.zero_grad()
-                    loss, recon = self._compute_loss(
-                        x_init, target_ys, target_fs, edge_index, edge_type
+                    loss, _ = self._compute_loss(
+                        x_init, target_ys, target_fs, edge_index, edge_type, recon_mask
                     )
                     loss.backward()
-                    if self.cfg.grad_clip > 0:
-                        torch.nn.utils.clip_grad_norm_(x_init, self.cfg.grad_clip)
+                    # 【Fix-4】不在 closure 内做梯度裁剪：
+                    # LBFGS 会多次调用 closure 执行 line search，每次裁剪会
+                    # 改变梯度方向，导致曲率对估计失真，破坏准牛顿更新。
                     return loss
 
                 loss = optimizer.step(closure)
-                # 重新计算 recon 用于日志
+
+                # 步后投影回可行域，修正 LBFGS 步长可能越出约束边界的情况
+                if self.projector is not None:
+                    with torch.no_grad():
+                        x_init.data = self.projector.project(x_init.data)
+
+                # 投影后重新计算总损失与 recon，确保 loss_val（早停判据）与
+                # best_x（后投影状态）始终对应同一个 x_init 快照，消除前后投影
+                # 导致的状态不一致（若未配置 projector 则直接复用 closure 返回值）。
                 with torch.no_grad():
-                    _, recon = self._compute_loss(
-                        x_init, target_ys, target_fs, edge_index, edge_type
+                    loss, recon = self._compute_loss(
+                        x_init, target_ys, target_fs, edge_index, edge_type, recon_mask
                     )
             else:
+                # Adam 路径
                 optimizer.zero_grad()
                 loss, recon = self._compute_loss(
-                    x_init, target_ys, target_fs, edge_index, edge_type
+                    x_init, target_ys, target_fs, edge_index, edge_type, recon_mask
                 )
                 loss.backward()
                 if self.cfg.grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(x_init, self.cfg.grad_clip)
                 optimizer.step()
                 if scheduler is not None:
-                    scheduler.step(loss)
+                    scheduler.step(loss.detach())
 
-            # 硬约束投影
-            if self.projector is not None and (step + 1) % self.cfg.projection_interval == 0:
-                with torch.no_grad():
-                    x_init.data = self.projector.project(x_init.data)
+                # Adam 的按间隔硬约束投影
+                if self.projector is not None and (step + 1) % self.cfg.projection_interval == 0:
+                    with torch.no_grad():
+                        x_init.data = self.projector.project(x_init.data)
 
             loss_val = loss.item() if isinstance(loss, torch.Tensor) else loss
             recon_val = recon.item()
@@ -500,7 +599,7 @@ class GNNInverter:
             x_inv=best_x.cpu(),
             loss_history=loss_history,
             recon_history=recon_history,
-            converged=final_recon_mse < self.cfg.recon_tol or patience_counter < self.cfg.patience,
+            converged=final_recon_mse < self.cfg.recon_tol,
             n_iters=len(loss_history),
             final_recon_mse=final_recon_mse,
             final_ys_mae=final_ys_mae,
@@ -516,14 +615,27 @@ class GNNInverter:
         target_fs: torch.Tensor,
         edge_index: torch.Tensor,
         edge_type: torch.Tensor,
+        recon_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """返回 (总损失, 纯重建损失)。"""
+        """返回 (总损失, 纯重建损失)。
+
+        recon_mask: 若提供，则重建损失只在 mask=True 的节点上计算，
+                    避免优化阶段泄露训练集标签信息。
+        """
         ys_pred, fs_pred = self.model(x, edge_index, edge_type)
-        recon = F.mse_loss(ys_pred, target_ys) + F.mse_loss(fs_pred, target_fs)
+        if recon_mask is not None:
+            recon = (
+                F.mse_loss(ys_pred[recon_mask], target_ys[recon_mask])
+                + F.mse_loss(fs_pred[recon_mask], target_fs[recon_mask])
+            )
+        else:
+            recon = F.mse_loss(ys_pred, target_ys) + F.mse_loss(fs_pred, target_fs)
 
         reg = torch.tensor(0.0, device=x.device, dtype=x.dtype)
         for reg_fn in self.regularizers:
-            reg = reg + reg_fn(x, edge_index, self.anchor)
+            # 【Fix-5】将 edge_type 传入正则器，让 SmoothnessRegularizer 等
+            # 可按关系类型过滤边，避免异质边语义混用。
+            reg = reg + reg_fn(x, edge_index, self.anchor, edge_type)
 
         total = recon + reg
         return total, recon
@@ -538,10 +650,13 @@ class GNNInverter:
         edge_index: torch.Tensor,
         edge_type: torch.Tensor,
         initializers: Optional[Dict[str, Initializer]] = None,
+        recon_mask: Optional[torch.Tensor] = None,
     ) -> InversionResult:
         """
         多初始点重启，返回重建误差最小的结果。
         默认包含: training_mean, dirichlet, random_normal, zero。
+
+        recon_mask: 可选节点掩码，仅在指定节点上计算重建损失（见 _compute_loss）。
         """
         N = target_ys.size(0)
         d_in = self._infer_input_dim()
@@ -560,7 +675,8 @@ class GNNInverter:
             x0 = init_fn.generate((N, d_in), self.anchor, self.device)
             logger.info(f"[MultiStart] Running inversion from init: {name}")
             res = self.invert_single(
-                target_ys, target_fs, edge_index, edge_type, x0, init_name=name
+                target_ys, target_fs, edge_index, edge_type, x0,
+                init_name=name, recon_mask=recon_mask,
             )
             results.append(res)
             logger.info(
@@ -584,22 +700,33 @@ class GNNInverter:
         edge_index: torch.Tensor,
         edge_type: torch.Tensor,
         batch_size: int = 1,   # 目前只支持 batch_size=1（全图），因为图耦合
+        recon_mask: Optional[torch.Tensor] = None,
     ) -> InversionResult:
         """对全图进行一次性联合反推。"""
         if batch_size != 1:
             raise NotImplementedError("Graph-coupled inversion requires full-graph optimization.")
-        return self.invert_multistart(target_ys, target_fs, edge_index, edge_type)
+        return self.invert_multistart(
+            target_ys, target_fs, edge_index, edge_type, recon_mask=recon_mask
+        )
 
     # -----------------------------------------------------------------------
     # 辅助：推断输入维度
     # -----------------------------------------------------------------------
     def _infer_input_dim(self) -> int:
-        """通过假前向推断模型的输入特征维度。"""
-        # 尝试从模型的第一层推断
+        """返回节点输入特征维度。
+
+        优先使用 GNNInverterConfig.input_dim（显式配置），
+        回退到遍历模型寻找第一个 Linear 层（对 RGAT 等含多层 Linear 的模型不可靠）。
+        """
+        if self.cfg.input_dim is not None:
+            return self.cfg.input_dim
         for module in self.model.modules():
             if isinstance(module, nn.Linear):
                 return module.in_features
-        raise RuntimeError("Cannot infer input dim from model.")
+        raise RuntimeError(
+            "无法从模型结构自动推断输入维度，"
+            "请在 GNNInverterConfig 中显式设置 input_dim 字段。"
+        )
 
 
 # ===========================================================================
@@ -829,10 +956,10 @@ class GNNInversionBenchmark:
         # 3. 耗时对比
         ax = axes[0, 2]
         times = [comp.results[n].runtime_sec for n in names]
-        ax.bar(names, times, color=colors, edgecolor="k")
+        time_bars = ax.bar(names, times, color=colors, edgecolor="k")
         ax.set_ylabel("Time (s)")
         ax.set_title("Runtime by Scenario")
-        for bar, val in zip(bars, times):
+        for bar, val in zip(time_bars, times):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height()*1.05,
                     f"{val:.1f}s", ha="center", va="bottom", fontsize=8)
         ax.grid(True, ls="--", alpha=0.3)
