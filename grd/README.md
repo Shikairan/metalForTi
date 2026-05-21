@@ -30,7 +30,8 @@ python -m grd.run_inversion \
 ## 输出
 
 - `grd/outputs/x_inv.pt`：`x_inv`（与 `material_graph` 同格式）、`ti_balance_inv` / `ti_balance_true`
-- `grd/outputs/inversion_summary.json`：重建误差与各维 MAE
+- `grd/outputs/inversion_summary.json`：汇总指标 + `field_descriptions` 字段中文说明
+- `grd/outputs/inversion_summary.txt`：可读 TXT 报告，每项带中文解释
 
 ## 依赖
 

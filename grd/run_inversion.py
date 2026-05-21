@@ -36,6 +36,7 @@ from grd.gnn_inverter import (
     ZeroInitializer,
 )
 from grd.io_utils import load_dual_rgat, load_graph_bundle, merge_hetero_edges
+from grd.summary_report import build_summary_dict, write_summary_json, write_summary_txt
 
 logger = logging.getLogger("grd.run_inversion")
 
@@ -268,26 +269,60 @@ def main() -> None:
         out_pt,
     )
 
-    summary = {
-        "device": device,
-        "total_wt": args.total_wt,
-        "target_mode": args.target_mode,
-        "converged": result.converged,
-        "final_recon_mse": result.final_recon_mse,
-        "final_ys_mae": result.final_ys_mae,
-        "final_fs_mae": result.final_fs_mae,
-        "n_iters": result.n_iters,
-        "best_init": result.init_name,
-        "eval_mask": args.node_mask,
-        "feature_mae_on_eval": {
-            "element_0_9": elem_mae,
-            "ti_balance": ti_mae,
-            "testenv_z": te_mae,
-            "coldway": cw_mae,
-        },
+    summary_json_path = args.out_dir / "inversion_summary.json"
+    summary_txt_path = args.out_dir / "inversion_summary.txt"
+    bounds_dict = {
+        "testenv_lower": bounds.testenv_lower.tolist(),
+        "testenv_upper": bounds.testenv_upper.tolist(),
+        "coldway_lower": bounds.coldway_lower.tolist(),
+        "coldway_upper": bounds.coldway_upper.tolist(),
     }
-    summary_path = args.out_dir / "inversion_summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    feature_mae = {
+        "element_0_9": elem_mae,
+        "ti_balance": ti_mae,
+        "testenv_z": te_mae,
+        "coldway": cw_mae,
+    }
+    summary = build_summary_dict(
+        device=device,
+        total_wt=args.total_wt,
+        target_mode=args.target_mode,
+        result_converged=result.converged,
+        final_recon_mse=result.final_recon_mse,
+        final_ys_mae=result.final_ys_mae,
+        final_fs_mae=result.final_fs_mae,
+        n_iters=result.n_iters,
+        best_init=result.init_name,
+        eval_mask_name=args.node_mask,
+        num_nodes=int(x.shape[0]),
+        num_eval_nodes=int(eval_mask.sum().item()),
+        feature_mae=feature_mae,
+        bounds=bounds_dict,
+        paths={
+            "x_inv_pt": str(out_pt.resolve()),
+            "summary_json": str(summary_json_path.resolve()),
+            "summary_txt": str(summary_txt_path.resolve()),
+        },
+        x_inv=x_inv,
+        x_true=x,
+        ti_inv=ti_inv,
+        ti_true=ti_true,
+        ckpt_path=str(args.ckpt.resolve()),
+        data_dir=str(args.data_dir.resolve()),
+    )
+    write_summary_json(summary_json_path, summary)
+    sample_idx = torch.where(eval_mask)[0][:3].tolist()
+    if len(sample_idx) < 3:
+        sample_idx = list(range(min(3, x.shape[0])))
+    write_summary_txt(
+        summary_txt_path,
+        summary,
+        x_inv=x_inv,
+        x_true=x,
+        ti_inv=ti_inv,
+        ti_true=ti_true,
+        sample_node_indices=sample_idx,
+    )
 
     logger.info(
         "反推完成: recon_mse=%.6f ys_mae=%.6f fs_mae=%.6f ti_mae=%.4f",
@@ -296,7 +331,7 @@ def main() -> None:
         result.final_fs_mae,
         ti_mae,
     )
-    logger.info("已保存: %s , %s", out_pt, summary_path)
+    logger.info("已保存: %s , %s , %s", out_pt, summary_json_path, summary_txt_path)
 
 
 if __name__ == "__main__":

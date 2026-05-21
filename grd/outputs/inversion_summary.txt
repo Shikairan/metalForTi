@@ -1,0 +1,165 @@
+========================================================================
+GNN 梯度反推结果汇总报告
+========================================================================
+
+生成时间（UTC）: 2026-05-21T07:53:49.902367+00:00
+
+【一、运行配置】
+  数据目录: data
+    说明: 含 material_graph.pt、ys.pt、fs.pt 的 PT 数据包路径
+  模型权重: ckpt
+    说明: 已训练 DualRGAT 检查点路径
+  运行设备: cpu
+    说明: 运行设备（cuda 或 cpu）
+  反推目标模式: ground_truth
+    说明: 反推目标：ground_truth=真实 ys/fs 标签；model_forward=当前 x 的前向预测
+  钛总量标尺 total_wt: 100.0 wt%
+    说明: 钛合金总量标尺（wt%），A 模式下 Ti = total_wt - sum(合金化元素)
+  评估节点子集 eval_mask: val
+    说明: 计算特征 MAE 时使用的节点子集（all/train/val）
+  节点总数: 604
+  参与特征 MAE 的节点数: 120
+
+【二、优化与重建指标】
+  是否收敛 converged: True
+    说明: 是否达到重建误差容限或早停条件
+  重建均方误差 final_recon_mse: 1.0000e-04
+    说明: 用反推 x 预测 ys、fs 相对目标的均方误差（越小越好）
+  YS 平均绝对误差 final_ys_mae: 0.050000
+    说明: 屈服强度 YS 预测与目标的平均绝对误差
+  FS 平均绝对误差 final_fs_mae: 0.030000
+    说明: 抗拉/疲劳强度 FS 预测与目标的平均绝对误差
+  迭代次数 n_iters: 100
+    说明: 优化实际迭代步数
+  最优初始化 best_init: training_mean
+    说明: 多初始点中重建误差最小的初始化策略名称
+
+【三、反推特征与真值对比（分段 MAE）】
+  合金化元素 element_0..9（Al,Zr,Sn,Mo,Cr,Nb,Si,V,Ta,Fe）
+    MAE = 0.800000
+  钛余量 Ti(wt%)=total_wt-sum(元素)
+    MAE = 5.000000
+  试验环境 testenv（tem,fcr 的 z-score）
+    MAE = 0.100000
+  工艺 coldway 18 维
+    MAE = 0.200000
+
+【四、钛余量与元素含量统计（全图）】
+  反推钛余量均值 ti_balance_inv_mean: 82.5800 wt%
+  真值钛余量均值 ti_balance_true_mean: 82.5800 wt%
+  反推 10 元含量之和 均值: 17.4200 wt%
+  反推 10 元含量之和 最大值: 45.0000 wt%（应 ≤ total_wt）
+  真值 10 元含量之和 均值: 0.0000 wt%
+    说明: Ti 不在 x 向量内，由 100 减去 10 个合金化元素之和得到
+
+【五、投影约束上下界】
+  说明: 反推每步投影到下列范围内；testenv 为 z-score，与训练 material_graph 一致
+  testenv 下界 (tem, fcr): [-0.8, -0.9]
+    说明: testenv 维下界（z-score 空间，列顺序 tem, fcr）
+  testenv 上界 (tem, fcr): [1.6, 2.0]
+    说明: testenv 维上界（z-score 空间）
+  coldway 下界 (18 维): 前3维=[0.0, 0.0, 0.0] … 共18维
+    说明: coldway 18 维下界（训练分位数，与 x 一致）
+  coldway 上界 (18 维): 前3维=[1.0, 1.0, 1.0] … 共18维
+    说明: coldway 18 维上界
+
+【六、输出文件说明】
+  grd/outputs/x_inv.pt
+    说明: PyTorch 主结果文件，含 x_inv 张量及 ti_balance 等
+  grd/outputs/inversion_summary.json
+    说明: 本 JSON 汇总（机器可读）
+  grd/outputs/inversion_summary.txt
+    说明: 本 TXT 汇总（人类可读，含中文说明）
+
+  x_inv.pt 内主要张量:
+    x_inv      — 形状 [604, 30]，反推得到的 30 维节点特征
+    x_true     — 原始真值特征（与 material_graph sample.x 相同）
+    ti_balance_inv / ti_balance_true — 钛余量 (N,)，单位 wt%
+    element_names — ['Al', 'Zr', 'Sn', 'Mo', 'Cr', 'Nb', 'Si', 'V', 'Ta', 'Fe']
+    列布局: [0:10] 元素 | [10:12] testenv z-score | [12:30] coldway
+    target_ys, target_fs — 反推目标标签
+    ys_pred, fs_pred — 用 x_inv 前向 GNN 的预测值
+
+【七、样例节点对比（反推 vs 真值）】
+  说明: 下列为部分节点的含量与钛余量对比，便于抽查
+  --- 节点 0 ---
+    Al: 反推=6.5000  真值=6.5000
+    Zr: 反推=2.0000  真值=2.0000
+    Sn: 反推=0.0000  真值=0.0000
+    Mo: 反推=1.0000  真值=1.0000
+    Cr: 反推=0.0000  真值=0.0000
+    Nb: 反推=0.0000  真值=0.0000
+    Si: 反推=0.1500  真值=0.1500
+    V: 反推=1.0000  真值=1.0000
+    Ta: 反推=0.0000  真值=0.0000
+    Fe: 反推=0.0000  真值=0.0000
+    10元之和: 反推=10.6500  真值=10.6500
+    Ti余量: 反推=89.3500  真值=89.3500 wt%
+    testenv(z): 反推=['-0.7909', '-0.8679']  真值=['-0.7909', '-0.8679']
+  --- 节点 1 ---
+    Al: 反推=6.5000  真值=6.5000
+    Zr: 反推=2.0000  真值=2.0000
+    Sn: 反推=0.0000  真值=0.0000
+    Mo: 反推=1.0000  真值=1.0000
+    Cr: 反推=0.0000  真值=0.0000
+    Nb: 反推=0.0000  真值=0.0000
+    Si: 反推=0.1500  真值=0.1500
+    V: 反推=1.0000  真值=1.0000
+    Ta: 反推=0.0000  真值=0.0000
+    Fe: 反推=0.0000  真值=0.0000
+    10元之和: 反推=10.6500  真值=10.6500
+    Ti余量: 反推=89.3500  真值=89.3500 wt%
+    testenv(z): 反推=['-0.7909', '-0.2215']  真值=['-0.7909', '-0.2215']
+  --- 节点 2 ---
+    Al: 反推=6.5000  真值=6.5000
+    Zr: 反推=2.0000  真值=2.0000
+    Sn: 反推=0.0000  真值=0.0000
+    Mo: 反推=1.0000  真值=1.0000
+    Cr: 反推=0.0000  真值=0.0000
+    Nb: 反推=0.0000  真值=0.0000
+    Si: 反推=0.1500  真值=0.1500
+    V: 反推=1.0000  真值=1.0000
+    Ta: 反推=0.0000  真值=0.0000
+    Fe: 反推=0.0000  真值=0.0000
+    10元之和: 反推=10.6500  真值=10.6500
+    Ti余量: 反推=89.3500  真值=89.3500 wt%
+    testenv(z): 反推=['-0.7909', '0.1017']  真值=['-0.7909', '0.1017']
+
+【八、JSON 字段中文索引】
+  完整机器可读汇总见 inversion_summary.json 中的 field_descriptions 字段
+    best_init: 多初始点中重建误差最小的初始化策略名称
+    bounds: 反推投影使用的上下界
+    coldway: 18 维工艺 coldway 特征的 MAE
+    coldway_lower: coldway 18 维下界（训练分位数，与 x 一致）
+    coldway_upper: coldway 18 维上界
+    converged: 是否达到重建误差容限或早停条件
+    device: 运行设备（cuda 或 cpu）
+    element_0_9: 10 个显式合金化元素（Al…Fe）的 MAE
+    element_sum_inv_mean: 反推 10 元含量之和的平均值（应 ≤ total_wt）
+    element_sum_true_mean: 真值 10 元含量之和的平均值
+    eval_mask: 计算特征 MAE 时使用的节点子集（all/train/val）
+    feature_mae_on_eval: 反推特征与真值 x 的分段平均绝对误差（在 eval_mask 上）
+    field_descriptions: 各 JSON 字段的中文含义（本字典）
+    final_fs_mae: 抗拉/疲劳强度 FS 预测与目标的平均绝对误差
+    final_recon_mse: 用反推 x 预测 ys、fs 相对目标的均方误差（越小越好）
+    final_ys_mae: 屈服强度 YS 预测与目标的平均绝对误差
+    n_iters: 优化实际迭代步数
+    num_eval_nodes: 参与特征 MAE 统计的节点数
+    num_nodes: 图中节点总数
+    paths: 输出文件路径
+    summary_json: 本 JSON 汇总（机器可读）
+    summary_txt: 本 TXT 汇总（人类可读，含中文说明）
+    target_mode: 反推目标：ground_truth=真实 ys/fs 标签；model_forward=当前 x 的前向预测
+    testenv_lower: testenv 维下界（z-score 空间，列顺序 tem, fcr）
+    testenv_upper: testenv 维上界（z-score 空间）
+    testenv_z: 试验环境 tem、fcr 的 z-score MAE（与训练张量同空间）
+    ti_balance: 钛余量 Ti(wt%) 的 MAE，Ti=total_wt-sum(element)
+    ti_balance_inv_mean: 反推钛余量在全图上的平均值
+    ti_balance_true_mean: 真值钛余量在全图上的平均值
+    total_wt: 钛合金总量标尺（wt%），A 模式下 Ti = total_wt - sum(合金化元素)
+    x_inv_pt: PyTorch 主结果文件，含 x_inv 张量及 ti_balance 等
+    x_inv_shape: 反推输入特征张量形状 [节点数, 30]
+
+========================================================================
+报告结束
+========================================================================
