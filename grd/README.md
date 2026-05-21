@@ -39,7 +39,11 @@
 
 ## 算法原理
 
-> **公式显示**：下文数学使用 GitHub 支持的 `$...$`（行内）与 `$$...$$`（独立成行的块级公式）。 勿用 `\(...\)` / `\[...\]`，否则在 GitHub 网页上会显示为带括号的原始 LaTeX。
+> **公式显示（GitHub / KaTeX）**：
+> - 使用 `$...$`（行内）与独立成行的 `$$...$$`；勿用 `\(...\)` / `\[...\]`。
+> - 目标星号写作 `$y^{\ast}$`、`$z^{\ast}$`，勿写 `$y^{*}$`：裸 `*` 会被 Markdown 当成强调符，页面上常变成空上标 `y^{}`。
+> - 范数用 `$\left\lVert\cdot\right\rVert$`，勿用裸 `\|`（易被误解析）。
+> - 块级公式中避免嵌套 `\underbrace{...}`；重建项与正则项宜拆成两行公式。
 
 本节说明 `grd` 在数学上在做什么、与常见机器学习/优化文献的对应关系，以及为何采用当前工程实现。
 
@@ -53,17 +57,18 @@ $$
 $$
 
 
-其中 $\mathcal{G}=(V,E)$ 为材料相似度图（约 604 节点、$10^5$ 量级边）。反演问题：求 $X$ 使得 $\hat{y}, \hat{z}$ 接近目标 $y^{*}, z^{*}$：
+其中 $\mathcal{G}=(V,E)$ 为材料相似度图（约 604 节点、$10^5$ 量级边）。反演问题：求 $X$ 使得 $\hat{y}, \hat{z}$ 接近目标 $y^{\ast}$、$z^{\ast}$：
 
 
 $$
-\min_{X}\; \mathcal{L}(X)
-= \underbrace{\|f_y(X)-y^{*}\|^2 + \|f_z(X)-z^{*}\|^2}_{\text{重建项}}
-+ \underbrace{\sum_k \lambda_k \mathcal{R}_k(X)}_{\text{正则项}}
-\quad
-\text{s.t.}\quad X \in \mathcal{C}
+\min_{X} \, \mathcal{L}(X) = \mathcal{L}_{\mathrm{recon}}(X) + \sum_{k} \lambda_k \mathcal{R}_k(X) \quad \text{s.t.} \; X \in \mathcal{C}
 $$
 
+其中 **重建项**（节点集 $\mathcal{M}$ 上均方误差，默认 $\mathcal{M}$ 为全图）：
+
+$$
+\mathcal{L}_{\mathrm{recon}}(X) = \left\lVert f_y(X) - y^{\ast} \right\rVert^2 + \left\lVert f_z(X) - z^{\ast} \right\rVert^2
+$$
 
 - **重建项**：对 MSE 在节点子集 $\mathcal{M}$ 上求平均（`recon_mask`；默认全图）。
 - **正则项**：先验与光滑性（见下）。
@@ -114,9 +119,9 @@ $$
 
 | 正则 | 数学形式（示意） | 作用 |
 |------|------------------|------|
-| **图平滑** `SmoothnessRegularizer` | $\sum_{(i,j)\in E_0} \|X_i - X_j\|_2^2$ | 仅在 **comp_sim** 边（`edge_type=0`）上惩罚，使组分在相似材料间平滑；避免 env/heat 边误约束 |
-| **锚定** `AnchorRegularizer` | $\|X - X_{\text{train}}\|_F^2$ | Tikhonov 型先验，拉回训练流形 |
-| **L1** `SparsityRegularizer` | $\|X\|_1$ | 默认权重极小；若启用应限定列（避免 wt% 被错误稀疏化） |
+| **图平滑** `SmoothnessRegularizer` | $\sum_{(i,j)\in E_0} \left\lVert X_i - X_j \right\rVert_2^2$ | 仅在 **comp_sim** 边（`edge_type=0`）上惩罚，使组分在相似材料间平滑；避免 env/heat 边误约束 |
+| **锚定** `AnchorRegularizer` | $\left\lVert X - X_{\text{train}} \right\rVert_F^2$ | Tikhonov 型先验，拉回训练流形 |
+| **L1** `SparsityRegularizer` | $\left\lVert X \right\rVert_1$ | 默认权重极小；若启用应限定列（避免 wt% 被错误稀疏化） |
 | **软物理** `PhysicalPenaltyRegularizer` | $\mathrm{ReLU}(-X)^2 + (\mathbf{1}^\top X - 1)^2$ | 联合反推时默认 **关闭**（`lambda=0`），由硬投影代替 |
 
 图平滑与 **图信号处理** 中的图拉普拉斯正则 $X^\top L X$ 同类，见 Shuman et al., *IEEE Signal Processing Magazine*, 2013。

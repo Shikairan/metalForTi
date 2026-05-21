@@ -17,12 +17,12 @@
 
 ## 优化问题形式
 
-记可学习变量为全图输入 $X \in \mathbb{R}^{N \times d}$，冻结的 GNN 为 $f_\theta$，目标输出为 $y^{*}, z^{*}$（YS/FS）。
+记可学习变量为全图输入 $X \in \mathbb{R}^{N \times d}$，冻结的 GNN 为 $f_\theta$，目标输出为 $y^{\ast}, z^{\ast}$（YS/FS）。
 
 
 
 $$
-\min_{X}\; \mathcal{L}_{\text{recon}}(X)
+\min_{X} \, \mathcal{L}_{\text{recon}}(X)
 + \lambda_s \mathcal{R}_{\text{smooth}}(X)
 + \lambda_a \mathcal{R}_{\text{anchor}}(X)
 + \cdots
@@ -35,7 +35,7 @@ $$
 $$
 \mathcal{L}_{\text{recon}}
 = \frac{1}{|\mathcal{M}|}\sum_{i\in\mathcal{M}}
-\bigl(\|f_y(X)_i - y^{*}_i\|^2 + \|f_z(X)_i - z^{*}_i\|^2\bigr)
+\bigl( (f_y(X)_i - y^{\ast}_i)^2 + (f_z(X)_i - z^{\ast}_i)^2 \bigr)
 $$
 
 
@@ -54,9 +54,9 @@ $\mathcal{M}$ 为节点掩码（`recon_mask`）；默认全图。
 
 | 类 | $\mathcal{R}$ 形式 | 默认在 run_inversion |
 |----|---------------------|----------------------|
-| `SmoothnessRegularizer` | $\sum_{(i,j)\in E_k} \|X_i - X_j\|^2$ | 是，`target_edge_types=[0]` 仅 comp_sim |
-| `SparsityRegularizer` | $\|X\|_1$ | 权重极小 1e-5 |
-| `AnchorRegularizer` | $\|X - X_{\text{anchor}}\|^2$ | 是 |
+| `SmoothnessRegularizer` | $\sum_{(i,j)\in E_k} \left\lVert X_i - X_j \right\rVert^2$ | 是，`target_edge_types=[0]` 仅 comp_sim |
+| `SparsityRegularizer` | $\left\lVert X \right\rVert_1$ | 权重极小 1e-5 |
+| `AnchorRegularizer` | $\left\lVert X - X_{\text{anchor}} \right\rVert^2$ | 是 |
 | `PhysicalPenaltyRegularizer` | 负值惩罚 + 行和偏离 | 权重 0（关闭） |
 
 `SmoothnessRegularizer` 传入 `edge_type`，避免 env/heat 边误平滑组分。
