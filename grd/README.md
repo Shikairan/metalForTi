@@ -180,33 +180,35 @@ $$
 
 ## 参考文献与链接
 
-以下按主题列出可直接访问的论文/书籍页面（建议引用以出版社或 arXiv 正式版本为准）。
+以下条目已核对 **题名、作者、会议/期刊与链接** 是否一致（2026-05 检查）。优先使用 arXiv / ML Anthology / 作者主页等开放链接；出版社 DOI 在浏览器中通常可用，部分站点对脚本访问返回 403 属正常情况。
 
 ### 优化与投影
 
 | 主题 | 文献 | 链接 |
 |------|------|------|
-| 投影梯度 / 约束优化 | Bertsekas, D. P. *Nonlinear Programming*, Athena Scientific, 1999, Ch.2 | https://web.mit.edu/dimitrib/www/ |
-| 单纯形欧氏投影 | Duchi, J. et al. "Efficient Projections onto the $\ell_1$-Ball…", *JMLR* 9:2345–2365, 2008 | https://jmlr.org/papers/v9/duchi08a.html |
-| Adam | Kingma, D. P. & Ba, J. "Adam…", *ICLR* 2015 | https://arxiv.org/abs/1412.6980 |
-| L-BFGS | Liu, D. C. & Nocedal, J. "On the Limited Memory BFGS Method…", *Mathematical Programming* 45:503–528, 1989 | https://doi.org/10.1007/BF01587477 |
+| 投影梯度 / 约束优化 | Bertsekas, D. P. *Nonlinear Programming*, 2nd ed., Athena Scientific, 1999, Ch.2 | [MIT 作者主页（教材索引）](https://web.mit.edu/dimitrib/www/) |
+| $\ell_1$ 球与单纯形欧氏投影 | Duchi, J., Shalev-Shwartz, S., Singer, Y., Chandra, T. "Efficient Projections onto the $\ell_1$-Ball for Learning in High Dimensions", *ICML* 2008 | [ML Anthology](https://mlanthology.org/icml/2008/duchi2008icml-efficient/) |
+| 单纯形投影（经典排序法） | Michelot, C. "A Finite Algorithm for Finding the Projection of a Point onto the Canonical Simplex", *J. Optim. Theory Appl.* 50:195–200, 1986 | [Springer](https://link.springer.com/article/10.1007/BF00938486) |
+| Adam | Kingma, D. P. & Ba, J. "Adam: A Method for Stochastic Optimization", *ICLR* 2015 | [arXiv:1412.6980](https://arxiv.org/abs/1412.6980) |
+| L-BFGS | Liu, D. C. & Nocedal, J. "On the Limited Memory BFGS Method for Large Scale Optimization", *Math. Program.* 45:503–528, 1989 | [Springer](https://link.springer.com/article/10.1007/BF01589116)（DOI `10.1007/BF01589116`） |
 
 ### 图神经网络（正向模型）
 
 | 主题 | 文献 | 链接 |
 |------|------|------|
-| Graph Attention Networks (GAT) | Veličković, P. et al. *ICLR* 2018 | https://arxiv.org/abs/1710.10903 |
-| Relational GCN (R-GCN) | Schlichtkrull, M. et al. *ESWC* 2018 | https://arxiv.org/abs/1703.06103 |
-| 图信号处理 / 图拉普拉斯正则 | Shuman, D. I. et al. "The Emerging Field of Signal Processing on Graphs", *IEEE SPM* 2013 | https://arxiv.org/abs/1211.0053 |
+| Graph Attention Networks (GAT) | Veličković, P. et al. "Graph Attention Networks", *ICLR* 2018 | [arXiv:1710.10903](https://arxiv.org/abs/1710.10903) |
+| Relational GCN (R-GCN) | Schlichtkrull, M. et al. "Modeling Relational Data with Graph Convolutional Networks", *ESWC* 2018 | [arXiv:1703.06103](https://arxiv.org/abs/1703.06103) |
+| 图信号处理 / 图拉普拉斯正则 | Shuman, D. I. et al. "The Emerging Field of Signal Processing on Graphs…", *IEEE Signal Processing Magazine* 30(3):83–98, 2013 | [arXiv:1211.0053](https://arxiv.org/abs/1211.0053)（期刊 DOI `10.1109/MSP.2012.2235192`） |
 
 ### 反演、逆问题与神经网络反求输入
 
 | 主题 | 文献 | 链接 |
 |------|------|------|
-| 逆问题与 Tikhonov 正则 | Hansen, P. C. *Discrete Inverse Problems: Insight and Algorithms*, SIAM, 2010 | https://doi.org/10.1137/1.9780898718836 |
-| 深度学习逆问题综述 | Arridge, P. et al. "Solving inverse problems using data-driven models", *Acta Numerica* 28, 2019 | https://doi.org/10.1017/S0962492919000059 |
-| 模型反演（隐私/攻击语境，思想相近） | Fredrikson, M. et al. "Model Inversion Attacks…", *CCS* 2015 | https://doi.org/10.1145/2810103.2813677 |
-| 可微代理 + 梯度优化设计（材料/物理设计常见范式） | Ren, S. et al. "Inverse molecular design using machine learning", *Science Advances* 4:eaap7885, 2018（示例：梯度驱动设计） | https://doi.org/10.1126/sciadv.aap7885 |
+| 逆问题与 Tikhonov 正则 | Hansen, P. C. *Discrete Inverse Problems: Insight and Algorithms*, SIAM, 2010 | [作者图书页](http://people.compute.dtu.dk/pcha/DIPbook.html)（DOI `10.1137/1.9780898718836`） |
+| 深度学习逆问题综述 | Arridge, P. et al. "Solving inverse problems using data-driven models", *Acta Numerica* 28, 2019 | [doi.org](https://doi.org/10.1017/S0962492919000059) |
+| 模型反演（隐私/攻击，思想相近） | Fredrikson, M., Jha, S., Ristenpart, T. "Model Inversion Attacks that Exploit Confidence Information and Basic Countermeasures", *CCS* 2015 | [作者 PDF](https://www.cs.cmu.edu/~mfredrik/papers/fjr2015ccs.pdf)（DOI `10.1145/2810103.2813677`） |
+| 逆材料设计（机器学习综述） | Sánchez-Lengeling, B. & Aspuru-Guzik, A. "Inverse molecular design using machine learning: Generative models for matter engineering", *Science* 361(6400):360–365, 2018 | [doi.org](https://doi.org/10.1126/science.aat2663) |
+| 逆设计 / 目标性质驱动（综述） | Zunger, A. "Inverse design in search of materials with target functionalities", *Nat. Rev. Chem.* 2:0121, 2018 | [doi.org](https://doi.org/10.1038/s41570-018-0121) |
 
 ### 本仓库数据流水线（非反推算法，便于溯源）
 
