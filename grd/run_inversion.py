@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-全特征联合梯度反推：element(10) + testenv(2) + coldway(18)。
-组分 A 模式：T_total=100 wt%，Ti=100-sum(element)；输出 x 与训练格式一致。
-默认：真实 ys/fs 还原验证；设备优先 GPU。
+run_inversion.py — 命令行入口：全图 GNN 输入特征梯度反推
+
+联合反推 30 维：element(10) + testenv(2) + coldway(18)。
+组分 A 模式：T_total=100 wt%，Ti = 100 - sum(element)。
+
+函数:
+  _resolve_device / _parse_args / _build_regularizers / main
+
+默认 ground_truth ys/fs；优先 GPU。
 """
 
 from __future__ import annotations
