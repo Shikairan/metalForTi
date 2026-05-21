@@ -408,7 +408,7 @@ class GNNInverter:
             optimizer = Adam([x_init], lr=self.cfg.lr)
             scheduler = ReduceLROnPlateau(
                 optimizer, mode="min", factor=self.cfg.lr_factor,
-                patience=self.cfg.lr_patience, verbose=False,
+                patience=self.cfg.lr_patience,
             )
         elif self.cfg.optimizer == "lbfgs":
             optimizer = LBFGS(
