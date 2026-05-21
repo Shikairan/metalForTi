@@ -1,8 +1,12 @@
 """
-datagnn / material_graph 节点特征布局（in_dim=30）与默认约束配置。
+feature_layout.py — 30 维节点特征布局与反推约束配置
 
-组分 A 模式：T_total=100 wt%，Ti = 100 - sum(element_0..9)；Ti 不在 x 向量内。
-element_0..9 = Al,Zr,Sn,Mo,Cr,Nb,Si,V,Ta,Fe（显式合金化元素）。
+与 gnnDir/datagnn 及 material_graph.pt 对齐：
+  [0:10]   element — Al,Zr,Sn,Mo,Cr,Nb,Si,V,Ta,Fe（wt%）
+  [10:12]  testenv — tem、fcr 的 z-score
+  [12:30]  coldway — 18 维工艺特征
+
+组分采用 A 模式：T_total=100 wt%，Ti = T_total - sum(element_0..9)（Ti 不在 x 内）。
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from grd.masked_projector import (
     MaskedCompositeProjector,
 )
 
+# ---------- 维段常量 ----------
 ELEMENT_DIM = 10
 TESTENV_DIM = 2
 COLDWAY_DIM = 18
@@ -34,9 +39,14 @@ COLDWAY_SLICE = slice(ELEMENT_DIM + TESTENV_DIM, INPUT_DIM)
 
 @dataclass
 class FeatureBounds:
-    """与训练张量同空间的上下界（testenv 为 z-score）。"""
+    """
+    testenv 与 coldway 在训练张量空间中的 box 上下界。
 
-    testenv_lower: torch.Tensor  # (2,)
+    testenv 为 z-score；coldway 与 x[:, 12:30] 同尺度。
+    element 由 ti_balance 投影约束，不在此 dataclass 中。
+    """
+
+    testenv_lower: torch.Tensor  # (2,) tem, fcr
     testenv_upper: torch.Tensor  # (2,)
     coldway_lower: torch.Tensor  # (18,)
     coldway_upper: torch.Tensor  # (18,)
@@ -46,12 +56,32 @@ def compute_ti_balance(
     x: torch.Tensor,
     total_wt: float = DEFAULT_TOTAL_WT,
 ) -> torch.Tensor:
-    """Ti(wt%) = total_wt - sum(element_0..9)，形状 (N,)。"""
+    """
+    按 A 模式计算每节点钛余量（wt%）。
+
+    公式: Ti = total_wt - sum(element_0..9)
+
+    参数:
+        x: (N, 30) 或至少含前 10 列的元素特征。
+        total_wt: 总量标尺，默认 100。
+
+    返回:
+        (N,) 浮点张量，每节点一个 Ti 含量。
+    """
     return float(total_wt) - x[:, ELEMENT_SLICE].sum(dim=1)
 
 
 def load_testenv_stats(stats_path: Path) -> Tuple[torch.Tensor, torch.Tensor]:
-    """读取 testenv_stats.csv，返回 mean/std，列顺序 tem, fcr。"""
+    """
+    读取 build_datagnn 导出的 testenv_stats.csv。
+
+    参数:
+        stats_path: 含 col/mean/std 或列式 mean/std 的 CSV。
+
+    返回:
+        mean: (2,) tem、fcr 的原始空间均值。
+        std: (2,) 标准差（下限 clamp 1e-8 防除零）。
+    """
     df = pd.read_csv(stats_path)
     if "col" in df.columns:
         df = df.set_index("col")
@@ -69,7 +99,18 @@ def physical_testenv_to_z(
     mean: torch.Tensor,
     std: torch.Tensor,
 ) -> torch.Tensor:
-    """物理量 -> 与训练一致的 z-score。"""
+    """
+    将物理单位的 tem/fcr 转为与训练图一致的 z-score。
+
+    公式: z = (x - mean) / std
+
+    参数:
+        physical: 标量或长度为 2 的序列（tem, fcr）。
+        mean, std: load_testenv_stats 的返回值。
+
+    返回:
+        (2,) z-score 张量。
+    """
     p = torch.as_tensor(physical, dtype=torch.float32).reshape(-1)
     return (p - mean) / std
 
@@ -82,7 +123,18 @@ def bounds_from_train_x(
     q_lo: float = 0.01,
     q_hi: float = 0.99,
 ) -> FeatureBounds:
-    """用训练节点分位数估计 testenv / coldway 的 box。"""
+    """
+    用训练节点上的分位数估计 testenv、coldway 的 box 界，并外扩 margin 比例跨度。
+
+    参数:
+        x: 全图特征 (N, 30)。
+        train_mask: 训练节点掩码。
+        margin: 在 [q_lo, q_hi] 区间宽度上外扩的比例，默认 5%。
+        q_lo, q_hi: 分位数，默认 1% 与 99%。
+
+    返回:
+        FeatureBounds，可直接用于 build_default_slice_specs。
+    """
     xt = x[train_mask]
     te = xt[:, TESTENV_SLICE]
     cw = xt[:, COLDWAY_SLICE]
@@ -117,6 +169,19 @@ def bounds_with_physical_testenv(
     fcr_upper: Optional[float] = None,
     margin: float = 0.05,
 ) -> FeatureBounds:
+    """
+    testenv 界：若提供物理上下界则转为 z-score；否则沿用训练分位数。
+    coldway 界：始终来自 bounds_from_train_x。
+
+    参数:
+        x, train_mask: 同 bounds_from_train_x。
+        stats_path: testenv_stats.csv 路径。
+        tem_lower/upper, fcr_lower/upper: 物理单位，None 表示该端用分位数。
+        margin: 分位数外扩比例。
+
+    返回:
+        FeatureBounds。
+    """
     base = bounds_from_train_x(x, train_mask, margin=margin)
     mean, std = load_testenv_stats(stats_path)
     te_lo = base.testenv_lower.clone()
@@ -140,6 +205,16 @@ def build_default_slice_specs(
     bounds: FeatureBounds,
     total_wt: float = DEFAULT_TOTAL_WT,
 ) -> List[FeatureSliceSpec]:
+    """
+    构造 grd 默认的三段投影规格：element(ti_balance) + testenv(box) + coldway(box)。
+
+    参数:
+        bounds: 训练估计的 testenv/coldway 界。
+        total_wt: Ti A 模式总量，默认 100 wt%。
+
+    返回:
+        传给 MaskedCompositeProjector 的 FeatureSliceSpec 列表。
+    """
     return [
         FeatureSliceSpec(
             name="element",
@@ -172,6 +247,17 @@ def build_projector(
     bounds: FeatureBounds,
     total_wt: float = DEFAULT_TOTAL_WT,
 ) -> MaskedCompositeProjector:
+    """
+    一键构建默认的按维段组合投影器。
+
+    参数:
+        anchor_x: 训练真值 x，作 scaled_simplex 锚定（ti_balance 不强制依赖 anchor）。
+        bounds: testenv/coldway 的 box 界。
+        total_wt: 组分总量上限。
+
+    返回:
+        可用于 GNNInverter 的 MaskedCompositeProjector 实例。
+    """
     return MaskedCompositeProjector(
         slices=build_default_slice_specs(bounds, total_wt=total_wt),
         anchor=anchor_x,

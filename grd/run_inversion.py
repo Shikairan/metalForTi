@@ -42,6 +42,15 @@ logger = logging.getLogger("grd.run_inversion")
 
 
 def _resolve_device(requested: str) -> str:
+    """
+    解析运行设备：若请求 cuda 但不可用则回退 cpu 并打日志。
+
+    参数:
+        requested: 用户传入的 --device 字符串。
+
+    返回:
+        实际使用的设备名。
+    """
     if requested.startswith("cuda") and not torch.cuda.is_available():
         logger.warning("CUDA 不可用，已回退到 CPU")
         return "cpu"
@@ -49,6 +58,11 @@ def _resolve_device(requested: str) -> str:
 
 
 def _parse_args() -> argparse.Namespace:
+    """
+    构建命令行参数解析器并返回解析结果。
+
+    默认路径相对于仓库根目录（grd 的上级）。
+    """
     root = Path(__file__).resolve().parents[1]
     p = argparse.ArgumentParser(description="GNN 全特征梯度反推 (grd)")
     p.add_argument(
@@ -110,6 +124,15 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _build_regularizers(cfg: GNNInverterConfig) -> List:
+    """
+    构造联合反推用的正则列表（不含全局 sum=1 惩罚，避免干扰 testenv/coldway）。
+
+    参数:
+        cfg: GNNInverterConfig，读取 lambda_smooth/sparse/anchor。
+
+    返回:
+        Regularizer 实例列表。
+    """
     return [
         SmoothnessRegularizer(cfg.lambda_smooth),
         SparsityRegularizer(cfg.lambda_sparse),
@@ -118,6 +141,10 @@ def _build_regularizers(cfg: GNNInverterConfig) -> List:
 
 
 def main() -> None:
+    """
+    CLI 主流程：加载数据与模型 → 构建投影与反推器 → multistart 优化 →
+    保存 x_inv.pt、inversion_summary.json、inversion_summary.txt。
+    """
     args = _parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
     torch.manual_seed(args.seed)

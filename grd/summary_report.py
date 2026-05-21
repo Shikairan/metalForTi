@@ -1,5 +1,10 @@
 """
 反推结果汇总：生成带中文字段说明的 TXT 与 JSON 报告。
+
+函数:
+  build_summary_dict — 组装指标字典
+  write_summary_json — 写 JSON
+  write_summary_txt — 写中文 TXT 报告
 """
 
 from __future__ import annotations
@@ -51,6 +56,16 @@ FIELD_DESCRIPTIONS_CN: Dict[str, str] = {
 
 
 def _fmt_float(v: float, nd: int = 6) -> str:
+    """
+    格式化浮点数用于 TXT 报告：很大或很小时用科学计数法。
+
+    参数:
+        v: 数值。
+        nd: 普通情况下的小数位数。
+
+    返回:
+        字符串。
+    """
     if abs(v) >= 1e4 or (abs(v) < 1e-3 and v != 0):
         return f"{v:.4e}"
     return f"{v:.{nd}f}"
@@ -80,6 +95,14 @@ def build_summary_dict(
     ckpt_path: str,
     data_dir: str,
 ) -> Dict[str, Any]:
+    """
+    将一次反推运行的指标与元数据组装为可 JSON 序列化的字典。
+
+    包含 field_descriptions 供程序/人查阅字段含义；并统计钛余量、元素行和等。
+
+    返回:
+        完整 summary 字典。
+    """
     elem_sum_inv = x_inv[:, :ELEMENT_DIM].sum(dim=1)
     elem_sum_true = x_true[:, :ELEMENT_DIM].sum(dim=1)
     return {
@@ -112,6 +135,13 @@ def build_summary_dict(
 
 
 def write_summary_json(path: Path, summary: Dict[str, Any]) -> None:
+    """
+    将 summary 字典写入 UTF-8 JSON 文件（indent=2，中文不转义）。
+
+    参数:
+        path: 输出路径，通常为 inversion_summary.json。
+        summary: build_summary_dict 的返回值。
+    """
     path.write_text(
         json.dumps(summary, indent=2, ensure_ascii=False),
         encoding="utf-8",
