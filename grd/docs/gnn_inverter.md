@@ -17,24 +17,32 @@
 
 ## 优化问题形式
 
-记可学习变量为全图输入 \(X \in \mathbb{R}^{N \times d}\)，冻结的 GNN 为 \(f_\theta\)，目标输出为 \(y^\*, z^\*\)（YS/FS）。
+记可学习变量为全图输入 $X \in \mathbb{R}^{N \times d}$，冻结的 GNN 为 $f_\theta$，目标输出为 $y^{*}, z^{*}$（YS/FS）。
 
-\[
+
+
+$$
 \min_{X}\; \mathcal{L}_{\text{recon}}(X)
 + \lambda_s \mathcal{R}_{\text{smooth}}(X)
 + \lambda_a \mathcal{R}_{\text{anchor}}(X)
 + \cdots
-\]
+$$
 
-\[
+
+
+
+
+$$
 \mathcal{L}_{\text{recon}}
 = \frac{1}{|\mathcal{M}|}\sum_{i\in\mathcal{M}}
-\bigl(\|f_y(X)_i - y^\*_i\|^2 + \|f_z(X)_i - z^\*_i\|^2\bigr)
-\]
+\bigl(\|f_y(X)_i - y^{*}_i\|^2 + \|f_z(X)_i - z^{*}_i\|^2\bigr)
+$$
 
-\(\mathcal{M}\) 为节点掩码（`recon_mask`）；默认全图。
 
-每次迭代：对 \(X\) 反向传播 \(\nabla_X \mathcal{L}\)，再 \(X \leftarrow \Pi_{\mathcal{C}}(X)\)。
+
+$\mathcal{M}$ 为节点掩码（`recon_mask`）；默认全图。
+
+每次迭代：对 $X$ 反向传播 $\nabla_X \mathcal{L}$，再 $X \leftarrow \Pi_{\mathcal{C}}(X)$。
 
 ## 主要类
 
@@ -44,11 +52,11 @@
 
 ### 正则器
 
-| 类 | \(\mathcal{R}\) 形式 | 默认在 run_inversion |
+| 类 | $\mathcal{R}$ 形式 | 默认在 run_inversion |
 |----|---------------------|----------------------|
-| `SmoothnessRegularizer` | \(\sum_{(i,j)\in E_k} \|X_i - X_j\|^2\) | 是，`target_edge_types=[0]` 仅 comp_sim |
-| `SparsityRegularizer` | \(\|X\|_1\) | 权重极小 1e-5 |
-| `AnchorRegularizer` | \(\|X - X_{\text{anchor}}\|^2\) | 是 |
+| `SmoothnessRegularizer` | $\sum_{(i,j)\in E_k} \|X_i - X_j\|^2$ | 是，`target_edge_types=[0]` 仅 comp_sim |
+| `SparsityRegularizer` | $\|X\|_1$ | 权重极小 1e-5 |
+| `AnchorRegularizer` | $\|X - X_{\text{anchor}}\|^2$ | 是 |
 | `PhysicalPenaltyRegularizer` | 负值惩罚 + 行和偏离 | 权重 0（关闭） |
 
 `SmoothnessRegularizer` 传入 `edge_type`，避免 env/heat 边误平滑组分。
@@ -57,7 +65,7 @@
 
 | 类 | 说明 |
 |----|------|
-| `SimplexProjector` | Duchi 算法，行投影到 \(\Delta^{d-1}\) |
+| `SimplexProjector` | Duchi 算法，行投影到 $\Delta^{d-1}$ |
 | `BoxProjector` | 分量 clamp |
 | `CompositeProjector` | 按名称串联 |
 | （推荐在 grd 中用 `MaskedCompositeProjector`） | 见 `masked_projector.py` |
@@ -73,7 +81,7 @@
 | `invert_single` | 单初始点优化；支持 `recon_mask` |
 | `invert_multistart` | 多初始点，取最小 `final_recon_mse` |
 | `_compute_loss` | 前向 + 重建 + 正则；正则接收 `edge_type` |
-| `_infer_input_dim` | 从 `nn.Linear` 推断 \(d\)（建议显式 `input_dim`） |
+| `_infer_input_dim` | 从 `nn.Linear` 推断 $d$（建议显式 `input_dim`） |
 
 #### Adam 路径
 
@@ -99,6 +107,6 @@ ys, fs = model(x, edge_index, edge_type)
 
 ## 相关文档
 
-- [masked_projector.md](./masked_projector.md) — \(\Pi_{\mathcal{C}}\) 实现
+- [masked_projector.md](./masked_projector.md) — $\Pi_{\mathcal{C}}$ 实现
 - [run_inversion.md](./run_inversion.md) — 默认正则与 recon_mask 接线
 - [../README.md#算法原理](../README.md#算法原理) — 全文公式与论文链接

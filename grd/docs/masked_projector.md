@@ -6,8 +6,8 @@
 
 ## 作用
 
-实现 **投影梯度法（Projected Gradient / Projected Adam）** 中的投影算子 \(\Pi_\mathcal{C}(\cdot)\)：  
-在每次梯度更新后，将 \(x\) 的不同列段投影到各自可行集 \(\mathcal{C}_k\)。
+实现 **投影梯度法（Projected Gradient / Projected Adam）** 中的投影算子 $\Pi_\mathcal{C}(\cdot)$：  
+在每次梯度更新后，将 $x$ 的不同列段投影到各自可行集 $\mathcal{C}_k$。
 
 ## 核心类与函数
 
@@ -21,7 +21,7 @@
 | `box` | 轴对齐区间 | testenv、coldway |
 | `simplex` | 非负，行和 = 1 | 概率组分（本仓库默认不用） |
 | `scaled_simplex` | 单纯形 × 行缩放 | 按 anchor 总量缩放 |
-| `nonnegative` | \(x \ge 0\) | 仅非负 |
+| `nonnegative` | $x \ge 0$ | 仅非负 |
 | `none` | 不投影 | 跳过 |
 
 ### `_project_ti_balance_rows(block, total_wt)`
@@ -53,7 +53,7 @@ x ← Π_C(x)               # 本模块
 
 | 主题 | 说明 | 参考 |
 |------|------|------|
-| 欧氏单纯形投影 | \(O(d \log d)\) 排序法 | Duchi et al., JMLR 2008（见总 README） |
+| 欧氏单纯形投影 | $O(d \log d)$ 排序法 | Duchi et al., JMLR 2008（见总 README） |
 | 投影梯度法 | 非光滑约束优化的标准框架 | Bertsekas, *Nonlinear Programming* |
 | Box 约束 | 逐维 `clamp` | 盒约束投影为分量级闭式解 |
 
