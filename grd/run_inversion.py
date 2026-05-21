@@ -126,12 +126,26 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="强制 CPU（用于无 GPU 环境测试）",
     )
+    p.add_argument(
+        "--recon-mask-mode",
+        choices=["none", "val", "train"],
+        default="none",
+        help=(
+            "限制重建损失的计算范围（Fix-7）："
+            " none=全图节点（默认），val=仅验证集，train=仅训练集。"
+            " 使用 val 可避免优化时泄露训练集标签，但因 GNN 消息传递耦合，"
+            " 训练节点特征仍会间接影响验证节点预测。"
+        ),
+    )
     return p.parse_args()
 
 
 def _build_regularizers(cfg: GNNInverterConfig) -> List:
     """
-    构造联合反推用的正则列表（不含全局 sum=1 惩罚，避免干扰 testenv/coldway）。
+    构造联合反推用的正则列表。
+
+    图平滑正则只作用于 comp_sim 边（关系 id=0），避免将 env_sim/heat_sim
+    等语义不同的边混入组分特征的平滑惩罚（Fix-5）。
 
     参数:
         cfg: GNNInverterConfig，读取 lambda_smooth/sparse/anchor。
@@ -140,7 +154,7 @@ def _build_regularizers(cfg: GNNInverterConfig) -> List:
         Regularizer 实例列表。
     """
     return [
-        SmoothnessRegularizer(cfg.lambda_smooth),
+        SmoothnessRegularizer(cfg.lambda_smooth, target_edge_types=[0]),
         SparsityRegularizer(cfg.lambda_sparse),
         AnchorRegularizer(cfg.lambda_anchor),
     ]
@@ -206,7 +220,8 @@ def main() -> None:
         lambda_nonneg=0.0,
         lambda_sum1=0.0,
         projection_interval=1,
-        projectors=[],
+        projectors=[],          # 硬约束由外部 MaskedCompositeProjector 接管
+        input_dim=INPUT_DIM,    # Fix-6：显式指定输入维度，避免从模型结构推断出错
         recon_tol=args.recon_tol,
         device=device,
     )
@@ -236,9 +251,18 @@ def main() -> None:
     else:
         initializers = None
 
+    # Fix-7：可选地只在指定节点上计算重建损失
+    if args.recon_mask_mode == "val":
+        opt_recon_mask = val_mask.to(device)
+    elif args.recon_mask_mode == "train":
+        opt_recon_mask = train_mask.to(device)
+    else:
+        opt_recon_mask = None  # 全图（默认）
+
     logger.info(
-        "开始全图联合反推: Ti余量 A 模式 T_total=%.1f; coldway/testenv=训练分位数 box",
+        "开始全图联合反推: Ti余量 A 模式 T_total=%.1f; coldway/testenv=训练分位数 box; recon_mask=%s",
         args.total_wt,
+        args.recon_mask_mode,
     )
     result = inverter.invert_multistart(
         target_ys=target_ys,
@@ -246,6 +270,7 @@ def main() -> None:
         edge_index=edge_index,
         edge_type=edge_type,
         initializers=initializers,
+        recon_mask=opt_recon_mask,
     )
 
     x_inv = result.x_inv
