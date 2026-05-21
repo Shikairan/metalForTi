@@ -40,7 +40,12 @@ if not logger.handlers:
 
 @dataclass
 class GNNInverterConfig:
-    """梯度反推的全局配置。"""
+    """
+    梯度反推的全局超参数 dataclass。
+
+    控制优化器类型、学习率、正则权重、硬投影策略、多初始点与早停等；
+    传给 GNNInverter 使用。
+    """
 
     # 优化器
     optimizer: Literal["adam", "lbfgs"] = "adam"
