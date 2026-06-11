@@ -1,0 +1,23 @@
+# gnnDir dependencies (Python 3.10)
+#
+# Create environment:
+#   conda create -n metalgnn python=3.10 -y
+#   conda activate metalgnn
+#
+# GPU (CUDA 11.8) — install PyTorch first, then the rest:
+#   pip install torch==2.0.1 --index-url https://download.pytorch.org/whl/cu118
+#   pip install -r requirements.txt
+#
+# CPU only:
+#   pip install torch==2.0.1
+#   pip install -r requirements.txt
+#
+# Notes:
+# - Keep numpy<2 (PyTorch 2.0.x / some wheels may warn or fail on NumPy 2.x).
+# - build_datagnn.py also needs ../pt_dataset.py on PYTHONPATH (repo sibling of gnnDir/).
+# - torch-geometric is pinned to match a tested stack with torch 2.0.1.
+
+numpy>=1.24.0,<2.0.0
+pandas>=2.0.0,<3.0.0
+torch==2.0.1
+torch-geometric==2.7.0

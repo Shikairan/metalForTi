@@ -1,9 +1,10 @@
-# symbolTorch — use Python >= 3.11 (torch-symbolic requirement)
+# symbolTorch — 需 Python >= 3.11（torch-symbolic）
 #
-# Recommended:
-#   /root/miniconda3/bin/python3.13 -m pip install -r requirements.txt
+# 推荐：使用仓库根目录统一安装（Python 3.11 + torch 2.10 cu130）：
+#   见 ../README.md → pip install -r ../requirements.txt
 #
-# Also requires Julia for PySR (installed automatically on first run).
+# 单独安装本目录时，请先按 README 装好 GPU 版 torch，再 pip install -r requirements.txt
+# 首次运行 PySR 可能自动安装 Julia。
 
 numpy>=1.24.0,<2.0.0
 pandas>=2.0.0,<3.0.0

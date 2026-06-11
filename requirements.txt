@@ -1,27 +1,31 @@
-# metalForTi — 主环境依赖（gnnDir 训练 + grd 梯度反推）
+# metalForTi — 统一环境依赖（gnnDir + grd + symbolTorch）
 #
-# Python 版本：3.10（推荐，与下列 torch 版本配套测试）
-#   conda create -n metal4ti python=3.10 -y && conda activate metal4ti
+# Python：3.11（推荐，全模块共用）
+#   conda create -n metal4ti python=3.11 -y && conda activate metal4ti
 #
-# 安装顺序（GPU / CUDA 11.8 示例）：
-#   pip install torch==2.0.1 --index-url https://download.pytorch.org/whl/cu118
+# GPU（驱动 ≥590，nvidia-smi 显示 CUDA 13.1）— 必须先装 PyTorch cu130，再装本文件：
+#   pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 \
+#     --index-url https://download.pytorch.org/whl/cu130
+#   pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv \
+#     -f https://data.pyg.org/whl/torch-2.10.0+cu130.html
 #   pip install -r requirements.txt
 #
 # CPU only：
-#   pip install torch==2.0.1
+#   pip install torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 \
+#     --index-url https://download.pytorch.org/whl/cpu
 #   pip install -r requirements.txt
 #
-# 符号蒸馏 symbolTorch 需 Python >= 3.11，请另建环境：
-#   pip install -r symbolTorch/requirements.txt
-#
-# 注意：
-# - 保持 numpy<2（与 torch 2.0.x 兼容）
-# - 运行 grd 时请在仓库根目录：export PYTHONPATH=$(pwd)
+# 说明：
+# - nvidia-smi 中的「CUDA Version: 13.1」是驱动支持的上限，无需本机单独装 CUDA Toolkit
+# - PyTorch cu130 wheel 自带 CUDA 运行时，与 Driver 590 兼容
+# - 勿在本文件中写 torch==...，避免 pip 从 PyPI 覆盖已安装的 GPU 版 torch
+# - 运行 grd：在仓库根目录 export PYTHONPATH=$(pwd)
 
-numpy>=1.24.0,<2.0.0
+numpy>=1.26.0,<3.0.0
 pandas>=2.0.0,<3.0.0
-torch==2.0.1
-torch-geometric==2.7.0
-
-# grd 可选：GNNInversionBenchmark 可视化（非 run_inversion 必需）
+torch-geometric==2.8.0
 matplotlib>=3.7.0
+scikit-learn>=1.3.0
+
+# symbolTorch（需 Python >= 3.11，与上列共用同一环境）
+torch-symbolic>=1.0.1

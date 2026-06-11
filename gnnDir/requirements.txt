@@ -1,23 +1,11 @@
-# gnnDir dependencies (Python 3.10)
+# gnnDir 历史依赖栈（torch 2.0.1 + cu118 + Python 3.10）
 #
-# Create environment:
-#   conda create -n metalgnn python=3.10 -y
-#   conda activate metalgnn
+# 新环境请改用仓库根目录 requirements.txt + README.md：
+#   Python 3.11 + torch 2.10.0 cu130（适配 Driver 590 / CUDA 13.1）
 #
-# GPU (CUDA 11.8) — install PyTorch first, then the rest:
+# 以下为旧栈，仅在做版本回退时参考：
+#   conda create -n metalgnn-legacy python=3.10 -y
 #   pip install torch==2.0.1 --index-url https://download.pytorch.org/whl/cu118
-#   pip install -r requirements.txt
-#
-# CPU only:
-#   pip install torch==2.0.1
-#   pip install -r requirements.txt
-#
-# Notes:
-# - Keep numpy<2 (PyTorch 2.0.x / some wheels may warn or fail on NumPy 2.x).
-# - build_datagnn.py also needs ../pt_dataset.py on PYTHONPATH (repo sibling of gnnDir/).
-# - torch-geometric is pinned to match a tested stack with torch 2.0.1.
+#   pip install -r gnnDir/requirements-legacy.txt
 
-numpy>=1.24.0,<2.0.0
-pandas>=2.0.0,<3.0.0
-torch==2.0.1
-torch-geometric==2.7.0
+# 见 requirements-legacy.txt（本文件仅作跳转说明）
