@@ -1,0 +1,26 @@
+========================================================================
+Pareto 遗传逆设计结果汇总
+========================================================================
+
+生成时间（UTC）: 2026-06-12T09:22:48.275314+00:00
+目标 YS: 0.959
+目标 FS: 0.857
+优化目标: three
+设备: cpu
+进化代数: 1
+种群规模: 4
+帕累托前沿个体数: 4
+
+【折中解（knee）】
+  f1 (|ΔYS|): 0.472173
+  f2 (|ΔFS|): 0.717765
+  f3 (锚定 L2): 0.249870
+  预测 YS/FS: 0.486827 / 0.139235
+  Ti 余量 wt%: 88.5340
+
+【输出文件】
+  pareto_json: /home/data/metalgnn/metalForTi/Pareto/outputs_ga/pareto_front.json
+  summary_txt: /home/data/metalgnn/metalForTi/Pareto/outputs_ga/ga_summary.txt
+  scatter_png: /home/data/metalgnn/metalForTi/Pareto/outputs_ga/pareto_scatter.png
+
+========================================================================

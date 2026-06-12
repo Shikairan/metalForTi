@@ -12,6 +12,7 @@
 |------|------|----------|
 | [`gnnDir/`](gnnDir/) | 数据构建、异质图 PT、RGAT/R-GCN **训练** | [gnnDir/README.md](gnnDir/README.md) |
 | [`grd/`](grd/) | 冻结 GNN 下的 **全特征梯度反推** | [grd/README.md](grd/README.md) |
+| [`Pareto/`](Pareto/) | **NSGA-II 帕累托遗传逆设计**（目标 YS/FS → 30 维配方） | [Pareto/README.md](Pareto/README.md) |
 | [`symbolTorch/`](symbolTorch/) | 将 GNN 蒸馏为 **可读符号公式**（SymTorch + PySR） | [symbolTorch/README.md](symbolTorch/README.md) |
 | [`optimizeSympy/`](optimizeSympy/) | SymPy 相关优化（占位/扩展） | — |
 
@@ -20,7 +21,9 @@
 ```text
 原始 CSV → gnnDir 构图/训练 → best_ysfs_gat.pt
                 ↓
-         grd 梯度反推（目标 YS/FS → 反求特征）
+         grd 梯度反推（全图还原验证）
+                ↓
+    Pareto 遗传逆设计（用户 YS/FS → 帕累托配方前沿）
                 ↓
       symbolTorch 符号蒸馏（可选，解释性公式）
 ```
@@ -143,6 +146,16 @@ python -m grd.run_inversion \
 - `grd/outputs/inversion_summary.txt` — 中文汇总报告
 
 **硬件建议：** 全图 RGAT 反传 **强烈建议 NVIDIA GPU（≥16GB 显存）**；CPU 易 OOM，可加 `--force-cpu --inits training_mean` 做冒烟测试。
+
+### B2. 帕累托遗传逆设计（Pareto）
+
+给定目标 YS/FS，用 NSGA-II 进化 30 维配方（604 背景图 + 1 虚拟设计节点）：
+
+```bash
+python -m Pareto.run_ga_design --target-ys <float> --target-fs <float>
+```
+
+输出见 `Pareto/outputs_ga/`（`pareto_front.json`、`ga_summary.txt`）。详见 [Pareto/README.md](Pareto/README.md)。
 
 ### C. 重新训练 GNN（gnnDir）
 
