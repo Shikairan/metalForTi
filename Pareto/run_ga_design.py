@@ -185,6 +185,7 @@ def main() -> None:
     bounds = bounds_from_train_x(x, train_mask)
     projector = build_projector(x, bounds)
     x_train = x[train_mask].clone()
+    train_node_indices = torch.where(train_mask)[0]
 
     ga_cfg = GAConfig(p_cross=args.p_cross, p_mut=args.p_mut)
     use_anchor = args.objectives == "three"
@@ -199,6 +200,7 @@ def main() -> None:
         element_thr=args.element_thr,
         testenv_thr=args.testenv_thr,
         coldway_thr=args.coldway_thr,
+        train_node_indices=train_node_indices,
     )
 
     archive = GeneArchive.from_graph(x, ys, fs, evaluator)

@@ -49,7 +49,7 @@ FIELD_DESCRIPTIONS_CN: Dict[str, str] = {
     "f3_anchor_l2": "与训练集最近邻的 L2 距离",
     "ys_pred": "GNN 预测 YS",
     "fs_pred": "GNN 预测 FS",
-    "nearest_train_idx": "最近邻训练样本节点索引",
+    "nearest_train_idx": "最近邻训练样本在原始图中的节点 id（0 基准，对应 material_graph 节点序号）",
     "knee_index": "加权和折中解在 individuals 中的索引",
     "best_overall": "全库加权最优个体",
     "best_virtual": "历史虚拟个体加权最优",
@@ -238,6 +238,7 @@ def write_pareto_scatter(path: Path, summary: Dict[str, Any]) -> None:
 
     inds = summary.get("individuals", [])
     if not inds:
+        logger.warning("帕累托前沿为空，跳过散点图输出（%s）", path)
         return
     f1 = [d["f1_ys_abs_err"] for d in inds]
     f2 = [d["f2_fs_abs_err"] for d in inds]
