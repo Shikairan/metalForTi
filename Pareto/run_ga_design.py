@@ -17,11 +17,12 @@ import torch
 
 from grd.feature_layout import bounds_from_train_x, build_projector
 from grd.io_utils import load_dual_rgat, load_graph_bundle, merge_hetero_edges
-from Pareto.ga_archive import ArchiveEntry, GeneArchive, weighted_tournament_select
+from Pareto.ga_archive import ArchiveEntry, GeneArchive, random_pair_select
 from Pareto.ga_evaluate import FitnessEvaluator
 from Pareto.ga_log_format import format_generation_block
 from Pareto.ga_graph import GraphContext
 from Pareto.ga_nsga2 import Individual, get_pareto_front
+from Pareto.ga_compile import compile_genome
 from Pareto.ga_operators import GAConfig, crossover_and_mutate
 from Pareto.ga_report import (
     build_archive_summary,
@@ -69,6 +70,8 @@ def _log_generation(
         logger.warning("%s: 无有效个体", gen_label)
         return
 
+    best_virtual = archive.best_virtual_entry()
+
     if front_candidates is not None:
         individuals = _entries_to_individuals(front_candidates, evaluator)
     else:
@@ -86,6 +89,12 @@ def _log_generation(
         archive_size=archive.size(),
         new_virtual_count=new_virtual_count,
         gene_source=best_entry.source_label(),
+        virtual_genome=best_virtual.genome if best_virtual is not None else None,
+        virtual_fitness=best_virtual.fitness if best_virtual is not None else None,
+        virtual_gene_source=best_virtual.source_label() if best_virtual is not None else None,
+        virtual_same_as_overall=(
+            best_virtual is not None and best_virtual is best_entry
+        ),
     )
     logger.info("%s", block)
 
@@ -108,11 +117,17 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--ckpt",
         type=Path,
-        default=root / "gnnDir" / "gnn" / "r-gatDouble" / "runs" / "best_ysfs_gat.pt",
+        default=root / "modelAll" / "runs" / "best_rgat_full.pt",
     )
-    p.add_argument("--rgat-dir", type=Path, default=root / "gnnDir" / "gnn" / "r-gatDouble")
+    p.add_argument("--rgat-dir", type=Path, default=root / "modelAll")
     p.add_argument("--out-dir", type=Path, default=root / "Pareto" / "outputs_ga")
-    p.add_argument("--pop-size", type=int, default=60, help="每代子代数 / 父本池规模")
+    p.add_argument("--pop-size", type=int, default=604, help="每代杂交子代数（GNN 评估数）")
+    p.add_argument(
+        "--virtual-pool-size",
+        type=int,
+        default=604,
+        help="虚拟精英池规模（历史虚拟加权 top-k，与原始池合并为父本池）",
+    )
     p.add_argument("--generations", type=int, default=150)
     p.add_argument("--objectives", choices=["two", "three"], default="three")
     p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
@@ -137,11 +152,7 @@ def _make_offspring(
 ) -> List[torch.Tensor]:
     children: List[torch.Tensor] = []
     while len(children) < pop_size:
-        p1 = weighted_tournament_select(breeders, rng)
-        # 当父本池规模 > 1 时，至多重试一次以避免自交
-        p2 = weighted_tournament_select(breeders, rng)
-        if len(breeders) > 1 and p2 is p1:
-            p2 = weighted_tournament_select(breeders, rng)
+        p1, p2 = random_pair_select(breeders, rng)
         c1, c2 = crossover_and_mutate(
             p1.genome,
             p2.genome,
@@ -191,25 +202,41 @@ def main() -> None:
     )
 
     archive = GeneArchive.from_graph(x, ys, fs, evaluator)
-    breeders = archive.select_top_k(args.pop_size)
+
+    def _repair_genome(g: torch.Tensor) -> torch.Tensor:
+        return compile_genome(g, bounds, projector, x_train, rng=rng)
+
+    n_repaired = archive.repair_all_genomes(_repair_genome)
+    logger.info("已对基因库 %d 条基因组执行 coldway/约束 compile 修复", n_repaired)
+
+    n_orig = archive.num_original()
     logger.info(
-        "基因库已初始化：%d 原始节点，代 0 选 top %d 父本（无 GNN forward）",
-        archive.size(),
-        len(breeders),
+        "基因库已初始化：%d 原始节点（固定父本池），虚拟精英池上限 %d",
+        n_orig,
+        args.virtual_pool_size,
     )
     _log_generation(
         archive,
-        "代 0（标签选优）",
+        "代 0（原始池就绪）",
         evaluator,
         target_ys=args.target_ys,
         target_fs=args.target_fs,
         ys_fs_from_labels=True,
-        front_candidates=breeders,
+        front_candidates=archive.original_entries(),
     )
 
     for gen in range(1, args.generations + 1):
+        breeder_pool = archive.build_breeder_pool(args.virtual_pool_size)
+        n_virt_elite = len(breeder_pool) - n_orig
+        logger.info(
+            "代 %d 父本池：原始 %d + 虚拟精英 %d = %d（随机配对杂交）",
+            gen,
+            n_orig,
+            n_virt_elite,
+            len(breeder_pool),
+        )
         children_genomes = _make_offspring(
-            breeders,
+            breeder_pool,
             args.pop_size,
             x_train,
             bounds,
@@ -219,15 +246,15 @@ def main() -> None:
         )
         fitness_list = [evaluator.evaluate_one(g) for g in children_genomes]
         archive.add_virtual_batch(children_genomes, fitness_list, generation=gen)
-        breeders = archive.select_top_k(args.pop_size)
+        offspring_batch = archive.latest_virtual_batch(args.pop_size)
         _log_generation(
             archive,
-            f"代 {gen}",
+            f"代 {gen}（本代 {args.pop_size} 子代已排序入库）",
             evaluator,
             target_ys=args.target_ys,
             target_fs=args.target_fs,
             new_virtual_count=args.pop_size,
-            front_candidates=breeders,
+            front_candidates=offspring_batch,
         )
 
     individuals = archive.to_individuals(evaluator)
@@ -252,6 +279,7 @@ def main() -> None:
         target_fs=args.target_fs,
         objectives=args.objectives,
         offspring_per_generation=args.pop_size,
+        virtual_pool_size=args.virtual_pool_size,
         generations=args.generations,
         device=device,
         paths=paths,

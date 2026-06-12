@@ -5,7 +5,7 @@ ga_archive.py — 基因库累积：604 原始节点 + 每代虚拟个体。
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, TYPE_CHECKING
+from typing import List, Optional, Tuple, TYPE_CHECKING
 
 import torch
 
@@ -110,11 +110,55 @@ class GeneArchive:
             return None
         return min(self._entries, key=lambda e: weighted_score(e.fitness))
 
+    def best_virtual_entry(self) -> Optional[ArchiveEntry]:
+        """历史虚拟个体中加权分最优者。"""
+        virtuals = [e for e in self._entries if not e.is_original]
+        if not virtuals:
+            return None
+        return min(virtuals, key=lambda e: weighted_score(e.fitness))
+
     def select_top_k(self, k: int) -> List[ArchiveEntry]:
+        """全库加权 top-k（遗留；父本池请用 build_breeder_pool）。"""
         if k <= 0:
             return []
         ranked = sorted(self._entries, key=lambda e: weighted_score(e.fitness))
         return ranked[: min(k, len(ranked))]
+
+    def original_entries(self) -> List[ArchiveEntry]:
+        """原始节点池：604 条，组成后不再增删。"""
+        return [e for e in self._entries if e.is_original]
+
+    def select_top_virtual_k(self, k: int) -> List[ArchiveEntry]:
+        """虚拟精英池：全部历史虚拟中加权 top-k，每代轮换。"""
+        if k <= 0:
+            return []
+        virtuals = [e for e in self._entries if not e.is_original]
+        if not virtuals:
+            return []
+        ranked = sorted(virtuals, key=lambda e: weighted_score(e.fitness))
+        return ranked[: min(k, len(ranked))]
+
+    def build_breeder_pool(self, virtual_pool_size: int) -> List[ArchiveEntry]:
+        """父本池 = 固定原始池 + 历史最优虚拟池。"""
+        return self.original_entries() + self.select_top_virtual_k(virtual_pool_size)
+
+    def repair_all_genomes(
+        self,
+        repair_fn,
+    ) -> int:
+        """对库内全部条目应用 compile/repair（返回修复条数）。"""
+        n = 0
+        for entry in self._entries:
+            entry.genome = repair_fn(entry.genome)
+            n += 1
+        return n
+
+    def latest_virtual_batch(self, batch_size: int) -> List[ArchiveEntry]:
+        """最近入库的虚拟批次（用于当代子代统计）。"""
+        if batch_size <= 0:
+            return []
+        virtuals = [e for e in self._entries if not e.is_original]
+        return virtuals[-batch_size:] if virtuals else []
 
     def to_individuals(self, evaluator: Optional[FitnessEvaluator] = None) -> List:
         from Pareto.ga_nsga2 import Individual
@@ -133,7 +177,7 @@ def weighted_tournament_select(
     rng: torch.Generator,
     k: int = 2,
 ) -> ArchiveEntry:
-    """加权锦标赛：分数低者胜。"""
+    """加权锦标赛：分数低者胜（遗留 API）。"""
     if not entries:
         raise ValueError("entries 为空")
     if len(entries) == 1:
@@ -141,6 +185,23 @@ def weighted_tournament_select(
     idx = torch.randint(0, len(entries), (k,), generator=rng).tolist()
     candidates = [entries[i] for i in idx]
     return min(candidates, key=lambda e: weighted_score(e.fitness))
+
+
+def random_pair_select(
+    entries: List[ArchiveEntry],
+    rng: torch.Generator,
+) -> Tuple[ArchiveEntry, ArchiveEntry]:
+    """从历史精英池中均匀随机选取一对父本（尽量不自交）。"""
+    if not entries:
+        raise ValueError("entries 为空")
+    if len(entries) == 1:
+        return entries[0], entries[0]
+    n = len(entries)
+    i1 = int(torch.randint(0, n, (1,), generator=rng).item())
+    i2 = int(torch.randint(0, n - 1, (1,), generator=rng).item())
+    if i2 >= i1:
+        i2 += 1
+    return entries[i1], entries[i2]
 
 
 def _self_test() -> None:
@@ -170,25 +231,33 @@ def _self_test() -> None:
     assert archive.num_original() == 604
     assert archive.num_virtual() == 0
 
-    top60 = archive.select_top_k(60)
-    assert len(top60) == 60
-    scores = [weighted_score(e.fitness) for e in top60]
-    assert scores == sorted(scores)
+    assert len(archive.original_entries()) == 604
 
-    genomes = [torch.randn(30) for _ in range(60)]
+    genomes = [torch.randn(30) for _ in range(700)]
     fits = [
-        FitnessResult(f1=1.0, f2=2.0, f3=0.5, ys_pred=699.0, fs_pred=798.0, nearest_train_idx=0)
-        for _ in range(60)
+        FitnessResult(f1=float(i % 10), f2=2.0, f3=0.5, ys_pred=699.0, fs_pred=798.0, nearest_train_idx=0)
+        for i in range(700)
     ]
     archive.add_virtual_batch(genomes, fits, generation=1)
-    assert archive.size() == 664
-    assert archive.num_virtual() == 60
+    assert archive.num_virtual() == 700
+
+    elite = archive.select_top_virtual_k(604)
+    assert len(elite) == 604
+    scores = [weighted_score(e.fitness) for e in elite]
+    assert scores == sorted(scores)
+
+    pool = archive.build_breeder_pool(604)
+    assert len(pool) == 604 + 604
 
     best = archive.best_entry()
     assert best is not None
+    best_v = archive.best_virtual_entry()
+    assert best_v is not None
+    assert not best_v.is_original
 
-    picked = weighted_tournament_select(top60, torch.Generator().manual_seed(0))
-    assert any(picked is e for e in top60)
+    p1, p2 = random_pair_select(pool, torch.Generator().manual_seed(0))
+    assert any(p1 is e for e in pool)
+    assert any(p2 is e for e in pool)
 
     print("[OK] ga_archive self-test passed")
 

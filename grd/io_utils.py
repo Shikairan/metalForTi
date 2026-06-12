@@ -104,7 +104,10 @@ def load_dual_rgat(
         ckpt: 完整 checkpoint 字典（含训练元信息）。
     """
     _ensure_rgat_double_on_path(gnn_rgat_dir)
-    from model_gat_double import SingleEncoder_DualRGAT  # noqa: WPS433
+    try:
+        from model_gat_double import SingleEncoder_DualRGAT  # noqa: WPS433
+    except ImportError:
+        from model_rgat import SingleEncoder_DualRGAT  # noqa: WPS433
 
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     in_dim = int(ckpt["in_dim"])

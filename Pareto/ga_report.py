@@ -22,7 +22,7 @@ from grd.feature_layout import (
     TESTENV_SLICE,
     compute_ti_balance,
 )
-from Pareto.ga_archive import GeneArchive, weighted_score
+from Pareto.ga_archive import ArchiveEntry, GeneArchive, weighted_score
 from Pareto.ga_evaluate import FitnessResult
 from Pareto.ga_nsga2 import Individual
 
@@ -36,6 +36,7 @@ FIELD_DESCRIPTIONS_CN: Dict[str, str] = {
     "num_original": "原始图节点条目数",
     "num_virtual": "累积虚拟个体条目数",
     "offspring_per_generation": "每代新增虚拟子代数",
+    "virtual_pool_size": "虚拟精英池规模（父本池中的历史虚拟 top-k）",
     "pareto_front_size": "第一非支配层个体数",
     "individuals": "帕累托前沿个体列表",
     "genome_30d": "30 维基因组（element+testenv+coldway）",
@@ -50,6 +51,9 @@ FIELD_DESCRIPTIONS_CN: Dict[str, str] = {
     "fs_pred": "GNN 预测 FS",
     "nearest_train_idx": "最近邻训练样本节点索引",
     "knee_index": "加权和折中解在 individuals 中的索引",
+    "best_overall": "全库加权最优个体",
+    "best_virtual": "历史虚拟个体加权最优",
+    "gene_source": "基因来源（原始/杂交虚拟）",
     "field_descriptions": "字段中文说明",
 }
 
@@ -77,6 +81,32 @@ def _individual_to_dict(
     }
 
 
+def _entry_to_dict(entry: ArchiveEntry) -> Dict[str, Any]:
+    d = _individual_to_dict(entry.genome, entry.fitness)
+    d["gene_source"] = entry.source_label()
+    d["is_original"] = entry.is_original
+    d["weighted_score"] = weighted_score(entry.fitness)
+    return d
+
+
+def _append_best_dict_lines(lines: List[str], title: str, rec: Optional[Dict[str, Any]]) -> None:
+    lines.append(f"【{title}】")
+    if not rec:
+        lines.append("  （无）")
+        lines.append("")
+        return
+    lines.extend([
+        f"  来源: {rec.get('gene_source', '—')}",
+        f"  加权分: {rec.get('weighted_score', 0):.6f}",
+        f"  f1 (|ΔYS|): {rec['f1_ys_abs_err']:.6f}",
+        f"  f2 (|ΔFS|): {rec['f2_fs_abs_err']:.6f}",
+        f"  f3 (锚定 L2): {rec.get('f3_anchor_l2', 0):.6f}",
+        f"  预测 YS/FS: {rec['ys_pred']:.6f} / {rec['fs_pred']:.6f}",
+        f"  Ti 余量 wt%: {rec['ti_balance_wt_pct']:.4f}",
+        "",
+    ])
+
+
 def find_knee_index(individuals: List[Dict[str, Any]]) -> int:
     """返回加权和最小个体的索引（f1 + f2 + 0.1*f3 最小）。
 
@@ -100,6 +130,7 @@ def build_archive_summary(
     target_fs: float,
     objectives: str,
     offspring_per_generation: int,
+    virtual_pool_size: int,
     generations: int,
     device: str,
     paths: Dict[str, str],
@@ -113,7 +144,11 @@ def build_archive_summary(
     knee = find_knee_index(individuals) if individuals else 0
 
     best = archive.best_entry()
+    best_virtual = archive.best_virtual_entry()
     best_weighted = weighted_score(best.fitness) if best is not None else None
+    best_virtual_weighted = (
+        weighted_score(best_virtual.fitness) if best_virtual is not None else None
+    )
 
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -122,12 +157,16 @@ def build_archive_summary(
         "objectives": objectives,
         "population_size": offspring_per_generation,
         "offspring_per_generation": offspring_per_generation,
+        "virtual_pool_size": virtual_pool_size,
         "generations": generations,
         "device": device,
         "archive_size": archive.size(),
         "num_original": archive.num_original(),
         "num_virtual": archive.num_virtual(),
         "best_weighted_score": best_weighted,
+        "best_virtual_weighted_score": best_virtual_weighted,
+        "best_overall": _entry_to_dict(best) if best is not None else None,
+        "best_virtual": _entry_to_dict(best_virtual) if best_virtual is not None else None,
         "pareto_front_size": len(individuals),
         "knee_index": knee,
         "individuals": individuals,
@@ -154,13 +193,18 @@ def write_ga_summary_txt(path: Path, summary: Dict[str, Any]) -> None:
         f"设备: {summary.get('device')}",
         f"进化代数: {summary.get('generations')}",
         f"每代子代数: {summary.get('offspring_per_generation', summary.get('population_size'))}",
+        f"虚拟精英池: {summary.get('virtual_pool_size', '—')}",
         f"基因库规模: {summary.get('archive_size', '—')}（原始 {summary.get('num_original', '—')} + 虚拟 {summary.get('num_virtual', '—')}）",
         f"帕累托前沿个体数: {summary.get('pareto_front_size')}",
         "",
     ]
     if summary.get("best_weighted_score") is not None:
         lines.append(f"全库最优加权分: {summary['best_weighted_score']:.6f}")
-        lines.append("")
+    if summary.get("best_virtual_weighted_score") is not None:
+        lines.append(f"历史虚拟最优加权分: {summary['best_virtual_weighted_score']:.6f}")
+    lines.append("")
+    _append_best_dict_lines(lines, "全库最优", summary.get("best_overall"))
+    _append_best_dict_lines(lines, "历史虚拟最优", summary.get("best_virtual"))
     inds = summary.get("individuals", [])
     knee = summary.get("knee_index", 0)
     if inds:

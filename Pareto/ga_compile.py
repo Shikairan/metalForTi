@@ -40,6 +40,66 @@ def _pick_one_method(row62: torch.Tensor) -> torch.Tensor:
     return out
 
 
+def _sample_train_stage_row(
+    train_coldway: torch.Tensor,
+    stage_i: int,
+    rng: Optional[torch.Generator],
+) -> Optional[torch.Tensor]:
+    """从训练库中抽取「该阶段非空」的 6 维行块。"""
+    active_rows: list[torch.Tensor] = []
+    for j in range(train_coldway.shape[0]):
+        row6 = train_coldway[j].reshape(_COLDWAY_STAGES, _ROW_DIM)[stage_i]
+        if _row_active(row6):
+            active_rows.append(row6.clone())
+    if not active_rows:
+        return None
+    idx = int(torch.randint(0, len(active_rows), (1,), generator=rng).item())
+    return active_rows[idx]
+
+
+def _enforce_cumulative_stages(
+    mat: torch.Tensor,
+    lo: torch.Tensor,
+    hi: torch.Tensor,
+    train_coldway: Optional[torch.Tensor],
+    rng: Optional[torch.Generator],
+    eps: float,
+) -> None:
+    """行累计：若启用阶段 k，则 0..k 均非空；禁止阶段 1+3 跳阶段 2。"""
+    if not _row_active(mat[0], eps=eps):
+        mid = ((lo + hi) / 2)[:_ROW_DIM]
+        mat[0] = mid
+        row62 = mat[0].reshape(_COLDWAY_METHODS, _COLDWAY_VALS)
+        mat[0] = _pick_one_method(row62).reshape(_ROW_DIM)
+
+    raw_last = -1
+    for i in range(_COLDWAY_STAGES):
+        if _row_active(mat[i], eps=eps):
+            raw_last = i
+
+    if raw_last < 0:
+        return
+
+    mid_row = ((lo + hi) / 2)[:_ROW_DIM]
+    for i in range(raw_last + 1):
+        if _row_active(mat[i], eps=eps):
+            continue
+        filled: Optional[torch.Tensor] = None
+        if train_coldway is not None and train_coldway.numel() > 0:
+            filled = _sample_train_stage_row(train_coldway, i, rng)
+        if filled is None:
+            filled = mid_row.clone()
+        row62 = filled.reshape(_COLDWAY_METHODS, _COLDWAY_VALS)
+        mat[i] = _pick_one_method(row62).reshape(_ROW_DIM)
+
+    for i in range(raw_last + 1, _COLDWAY_STAGES):
+        mat[i].zero_()
+
+    for i in range(raw_last + 1):
+        row62 = mat[i].reshape(_COLDWAY_METHODS, _COLDWAY_VALS)
+        mat[i] = _pick_one_method(row62).reshape(_ROW_DIM)
+
+
 def compile_coldway(
     cold: torch.Tensor,
     bounds: FeatureBounds,
@@ -69,34 +129,7 @@ def compile_coldway(
         rows.append(flat)
 
     mat = torch.stack(rows, dim=0)
-
-    def _fill_stage_row(stage_i: int) -> None:
-        if train_coldway is not None and train_coldway.numel() > 0:
-            j = int(torch.randint(0, train_coldway.shape[0], (1,), generator=rng).item())
-            mat[stage_i] = train_coldway[j].reshape(_COLDWAY_STAGES, _ROW_DIM)[stage_i]
-        else:
-            mat[stage_i] = ((lo + hi) / 2)[stage_i * _ROW_DIM : (stage_i + 1) * _ROW_DIM]
-
-    if not _row_active(mat[0], eps=eps):
-        _fill_stage_row(0)
-
-    last_active = -1
-    for i in range(_COLDWAY_STAGES):
-        if _row_active(mat[i], eps=eps):
-            last_active = i
-    if last_active < 0:
-        last_active = 0
-
-    for i in range(_COLDWAY_STAGES):
-        if i > last_active:
-            mat[i] = torch.zeros(_ROW_DIM, dtype=mat.dtype)
-        elif i <= last_active and not _row_active(mat[i], eps=eps):
-            _fill_stage_row(i)
-
-    for i in range(_COLDWAY_STAGES):
-        row62 = mat[i].reshape(_COLDWAY_METHODS, _COLDWAY_VALS)
-        mat[i] = _pick_one_method(row62).reshape(_ROW_DIM)
-
+    _enforce_cumulative_stages(mat, lo, hi, train_coldway, rng, eps)
     return mat.reshape(COLDWAY_DIM)
 
 
@@ -167,6 +200,14 @@ def _self_test() -> None:
         m = cw[i].reshape(3, 2)
         nonzero = (m.pow(2).sum(dim=1) > 1e-10).sum().item()
         assert nonzero <= 1
+    # 阶段 1+3 无阶段 2 的非法模式应被修复
+    g_bad = x[0].clone()
+    g_bad[COLDWAY_SLICE] = 0.0
+    g_bad[COLDWAY_SLICE].reshape(3, 6)[0, 4] = 0.5
+    g_bad[COLDWAY_SLICE].reshape(3, 6)[2, 0] = -0.1
+    out_bad = compile_genome(g_bad, bounds, proj, x)
+    cw2 = out_bad[COLDWAY_SLICE].reshape(3, 6)
+    assert cw2[1].abs().sum().item() > 1e-8
     print("[OK] ga_compile self-test passed")
 
 
