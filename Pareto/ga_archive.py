@@ -242,6 +242,25 @@ def _self_test() -> None:
     best = archive.best_entry()
     assert best is not None
 
+    # best_virtual_entry：应返回虚拟节点中加权分最优的个体
+    best_virt = archive.best_virtual_entry()
+    assert best_virt is not None
+    assert not best_virt.is_original
+
+    # select_top_k_mixed：ratio=0.5 时应 30 原始 + 30 虚拟
+    mixed = archive.select_top_k_mixed(60, orig_ratio=0.5)
+    assert len(mixed) == 60
+    n_orig_mixed = sum(1 for e in mixed if e.is_original)
+    n_virt_mixed = sum(1 for e in mixed if not e.is_original)
+    assert n_orig_mixed == 30, f"期望 30 原始，实得 {n_orig_mixed}"
+    assert n_virt_mixed == 30, f"期望 30 虚拟，实得 {n_virt_mixed}"
+
+    # select_top_k_mixed：无虚拟时应回退全原始
+    archive_orig_only = GeneArchive.from_graph(x, ys, fs, ev)
+    fallback = archive_orig_only.select_top_k_mixed(60, orig_ratio=0.3)
+    assert all(e.is_original for e in fallback)
+    assert len(fallback) == 60
+
     picked = weighted_tournament_select(top60, torch.Generator().manual_seed(0))
     assert any(picked is e for e in top60)
 

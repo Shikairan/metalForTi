@@ -37,8 +37,10 @@ class FitnessEvaluator:
         element_thr: float = 0.8,
         testenv_thr: float = 0.8,
         coldway_thr: float = 0.8,
+        train_node_indices: Optional[torch.Tensor] = None,
     ) -> None:
         self.model = model
+        self.model.eval()  # 防御性确保推理模式，避免 Dropout 激活
         self.ctx = ctx
         self.x_train = x_train.detach().cpu().float()
         self.target_ys = float(target_ys)
@@ -48,13 +50,24 @@ class FitnessEvaluator:
         self.element_thr = element_thr
         self.testenv_thr = testenv_thr
         self.coldway_thr = coldway_thr
+        # train_node_indices[i] = 当前 x_train[i] 在原始全图中的节点 id (0..N-1)
+        # 用于将 _anchor_distance 返回的局部索引映射回图节点 id
+        self.train_node_indices: Optional[torch.Tensor] = (
+            train_node_indices.detach().cpu().long() if train_node_indices is not None else None
+        )
 
     def _anchor_distance(self, genome: torch.Tensor) -> Tuple[float, int]:
         g = genome.detach().cpu().float().unsqueeze(0)
         diff = self.x_train - g
         dist = diff.pow(2).sum(dim=1)
-        idx = int(torch.argmin(dist).item())
-        return float(dist[idx].sqrt().item()), idx
+        local_idx = int(torch.argmin(dist).item())
+        # 映射回原始图节点 id；若未提供 train_node_indices 则返回局部索引（兼容旧接口）
+        graph_idx = (
+            int(self.train_node_indices[local_idx].item())
+            if self.train_node_indices is not None
+            else local_idx
+        )
+        return float(dist[local_idx].sqrt().item()), graph_idx
 
     @torch.no_grad()
     def evaluate_one(self, genome: torch.Tensor) -> FitnessResult:

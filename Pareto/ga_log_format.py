@@ -70,7 +70,7 @@ def format_coldway_table(cold: torch.Tensor) -> list[str]:
 
 def format_generation_block(
     gen_label: str,
-    front_size: int,
+    front_size: Optional[int],
     genome: torch.Tensor,
     fitness: FitnessResult,
     *,
@@ -81,13 +81,18 @@ def format_generation_block(
     new_virtual_count: Optional[int] = None,
     gene_source: Optional[str] = None,
 ) -> str:
-    """生成单代最优个体的多行文本块（不含 [INFO] 前缀）。"""
+    """生成单代最优个体的多行文本块（不含 [INFO] 前缀）。
+
+    front_size: 帕累托前沿个体数；传 None 时不显示该元信息（用于单个体展示）。
+    """
     g = genome.detach().cpu().float()
     ti = float(compute_ti_balance(g.unsqueeze(0), DEFAULT_TOTAL_WT)[0].item())
     elem_sum = float(g[ELEMENT_SLICE].sum().item())
 
     pred_label = "标签 YS/FS（未 GNN forward）" if ys_fs_from_labels else "预测"
-    meta_parts = [f"帕累托前沿 {front_size} 个体"]
+    meta_parts: list[str] = []
+    if front_size is not None:
+        meta_parts.append(f"帕累托前沿 {front_size} 个体")
     if archive_size is not None:
         meta_parts.append(f"基因库 {archive_size}")
     if new_virtual_count is not None and new_virtual_count > 0:

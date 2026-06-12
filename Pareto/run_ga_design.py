@@ -94,7 +94,7 @@ def _log_generation(
     if best_virt is not None:
         virt_block = format_generation_block(
             f"{gen_label} [虚拟最优]",
-            front_size=0,
+            front_size=None,  # 此块是单个体展示，不显示帕累托计数
             genome=best_virt.genome,
             fitness=best_virt.fitness,
             target_ys=target_ys,
@@ -200,6 +200,7 @@ def main() -> None:
     bounds = bounds_from_train_x(x, train_mask)
     projector = build_projector(x, bounds)
     x_train = x[train_mask].clone()
+    train_node_indices = torch.where(train_mask)[0]
 
     ga_cfg = GAConfig(p_cross=args.p_cross, p_mut=args.p_mut)
     use_anchor = args.objectives == "three"
@@ -214,6 +215,7 @@ def main() -> None:
         element_thr=args.element_thr,
         testenv_thr=args.testenv_thr,
         coldway_thr=args.coldway_thr,
+        train_node_indices=train_node_indices,
     )
 
     orig_ratio = max(0.0, min(1.0, args.orig_breeder_ratio))
