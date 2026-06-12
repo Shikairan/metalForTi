@@ -11,17 +11,17 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import torch
 
 from grd.feature_layout import bounds_from_train_x, build_projector
 from grd.io_utils import load_dual_rgat, load_graph_bundle, merge_hetero_edges
-from Pareto.ga_archive import GeneArchive, weighted_tournament_select
+from Pareto.ga_archive import ArchiveEntry, GeneArchive, weighted_tournament_select
 from Pareto.ga_evaluate import FitnessEvaluator
 from Pareto.ga_log_format import format_generation_block
 from Pareto.ga_graph import GraphContext
-from Pareto.ga_nsga2 import get_pareto_front
+from Pareto.ga_nsga2 import Individual, get_pareto_front
 from Pareto.ga_operators import GAConfig, crossover_and_mutate
 from Pareto.ga_report import (
     build_archive_summary,
@@ -33,6 +33,21 @@ from Pareto.ga_report import (
 logger = logging.getLogger("Pareto.run_ga_design")
 
 
+def _entries_to_individuals(
+    entries: List[ArchiveEntry],
+    evaluator: FitnessEvaluator,
+) -> List[Individual]:
+    """将 ArchiveEntry 列表转换为带 objectives 的 Individual 列表。"""
+    return [
+        Individual(
+            genome=e.genome.clone(),
+            fitness=e.fitness,
+            objectives=evaluator.objectives_tensor(e.fitness),
+        )
+        for e in entries
+    ]
+
+
 def _log_generation(
     archive: GeneArchive,
     gen_label: str,
@@ -42,14 +57,23 @@ def _log_generation(
     target_fs: float,
     ys_fs_from_labels: bool = False,
     new_virtual_count: int = 0,
+    front_candidates: Optional[List[ArchiveEntry]] = None,
 ) -> None:
-    """打印当前代全库最优个体的规整文本块。"""
-    individuals = archive.to_individuals(evaluator)
-    front = get_pareto_front(individuals)
+    """打印当前代全库最优个体的规整文本块。
+
+    front_candidates: 用于计算帕累托前沿的候选集（默认为当前 breeders 精英池）。
+    传入子集而非全库，将 O(n²) 帕累托排序限制在精英池规模，避免每代全库重排序。
+    """
     best_entry = archive.best_entry()
     if best_entry is None:
         logger.warning("%s: 无有效个体", gen_label)
         return
+
+    if front_candidates is not None:
+        individuals = _entries_to_individuals(front_candidates, evaluator)
+    else:
+        individuals = archive.to_individuals(evaluator)
+    front = get_pareto_front(individuals)
 
     block = format_generation_block(
         gen_label,
@@ -103,7 +127,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _make_offspring(
-    breeders: List,
+    breeders: List[ArchiveEntry],
     pop_size: int,
     x_train: torch.Tensor,
     bounds,
@@ -114,7 +138,10 @@ def _make_offspring(
     children: List[torch.Tensor] = []
     while len(children) < pop_size:
         p1 = weighted_tournament_select(breeders, rng)
+        # 当父本池规模 > 1 时，至多重试一次以避免自交
         p2 = weighted_tournament_select(breeders, rng)
+        if len(breeders) > 1 and p2 is p1:
+            p2 = weighted_tournament_select(breeders, rng)
         c1, c2 = crossover_and_mutate(
             p1.genome,
             p2.genome,
@@ -138,7 +165,7 @@ def main() -> None:
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("使用设备: %s", device)
-    x, ys, fs, train_mask, val_mask = load_graph_bundle(args.data_dir)
+    x, ys, fs, train_mask, _ = load_graph_bundle(args.data_dir)
     graph = torch.load(args.data_dir / "material_graph.pt", map_location="cpu", weights_only=False)
     edge_index, edge_type = merge_hetero_edges(graph)
     ctx = GraphContext.from_tensors(x, edge_index, edge_type)
@@ -177,6 +204,7 @@ def main() -> None:
         target_ys=args.target_ys,
         target_fs=args.target_fs,
         ys_fs_from_labels=True,
+        front_candidates=breeders,
     )
 
     for gen in range(1, args.generations + 1):
@@ -199,6 +227,7 @@ def main() -> None:
             target_ys=args.target_ys,
             target_fs=args.target_fs,
             new_virtual_count=args.pop_size,
+            front_candidates=breeders,
         )
 
     individuals = archive.to_individuals(evaluator)

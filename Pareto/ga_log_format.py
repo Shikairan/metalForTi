@@ -12,6 +12,7 @@ from grd.feature_layout import (
     COLDWAY_SLICE,
     DEFAULT_TOTAL_WT,
     ELEMENT_NAMES,
+    ELEMENT_SLICE,
     TESTENV_SLICE,
     compute_ti_balance,
 )
@@ -37,12 +38,6 @@ def _fmt_cell(v: float, width: int = 8) -> str:
     if abs(v) >= 1000 or (abs(v) < 1e-2 and v != 0):
         return f"{v:>{width}.2e}"
     return f"{v:>{width}.4f}"
-
-
-def _fmt_pair(a: float, b: float) -> str:
-    if abs(a) < 1e-12 and abs(b) < 1e-12:
-        return "—"
-    return f"{_fmt(a)},{_fmt(b)}"
 
 
 def format_coldway_table(cold: torch.Tensor) -> list[str]:
@@ -89,7 +84,7 @@ def format_generation_block(
     """生成单代最优个体的多行文本块（不含 [INFO] 前缀）。"""
     g = genome.detach().cpu().float()
     ti = float(compute_ti_balance(g.unsqueeze(0), DEFAULT_TOTAL_WT)[0].item())
-    elem_sum = float(g[:10].sum().item())
+    elem_sum = float(g[ELEMENT_SLICE].sum().item())
 
     pred_label = "标签 YS/FS（未 GNN forward）" if ys_fs_from_labels else "预测"
     meta_parts = [f"帕累托前沿 {front_size} 个体"]

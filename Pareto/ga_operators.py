@@ -96,16 +96,18 @@ def mutate_scalar(
 ) -> float:
     r = torch.rand(1, generator=rng).item()
     if r < cfg.p_mut_delta:
+        # delta 变异：对零值直接激活，对非零值按比例扰动
         if abs(v) < 1e-12:
             return _sample_nonzero(train_bank, dim_index, rng)
         eps = (torch.rand(1, generator=rng).item() * 2 - 1) * cfg.delta_frac
         return float(v * (1.0 + eps))
     if r < cfg.p_mut_delta + cfg.p_mut_zero:
+        # zero 变异：将当前值归零
         return 0.0
+    # activate 变异（p_mut_activate）：将零值激活为非零值；非零值保持不变
     if abs(v) < 1e-12:
         return _sample_nonzero(train_bank, dim_index, rng)
-    eps = (torch.rand(1, generator=rng).item() * 2 - 1) * cfg.delta_frac
-    return float(v * (1.0 + eps))
+    return v
 
 
 def mutate_genome(
@@ -146,9 +148,9 @@ def init_population(
         j = int(torch.randint(0, n_train, (1,), generator=rng).item())
         g = train_bank[j].clone()
         g = g + torch.randn(INPUT_DIM, generator=rng) * 0.05
-        g = compile_genome(g, bounds, projector, train_bank)
+        g = compile_genome(g, bounds, projector, train_bank, rng=rng)
         g = mutate_genome(g, train_bank, rng, cfg)
-        g = compile_genome(g, bounds, projector, train_bank)
+        g = compile_genome(g, bounds, projector, train_bank, rng=rng)
         pop.append(g)
     return pop
 
@@ -168,8 +170,8 @@ def crossover_and_mutate(
         c1, c2 = parent1.clone(), parent2.clone()
     c1 = mutate_genome(c1, train_bank, rng, cfg)
     c2 = mutate_genome(c2, train_bank, rng, cfg)
-    c1 = compile_genome(c1, bounds, projector, train_bank)
-    c2 = compile_genome(c2, bounds, projector, train_bank)
+    c1 = compile_genome(c1, bounds, projector, train_bank, rng=rng)
+    c2 = compile_genome(c2, bounds, projector, train_bank, rng=rng)
     return c1, c2
 
 
