@@ -45,10 +45,13 @@ def compile_coldway(
     bounds: FeatureBounds,
     train_coldway: Optional[torch.Tensor],
     *,
+    rng: Optional[torch.Generator] = None,
     eps: float = 1e-8,
 ) -> torch.Tensor:
     """
     cold: (18,) — 3 阶段 × (3 方式 × 2 数值)，行累计、至少阶段 0 非空。
+
+    rng: 随机数生成器；传入后保证 --seed 可复现性。
     """
     cw = cold.clone().float().reshape(_COLDWAY_STAGES, _ROW_DIM)
     lo = bounds.coldway_lower.float()
@@ -69,7 +72,7 @@ def compile_coldway(
 
     def _fill_stage_row(stage_i: int) -> None:
         if train_coldway is not None and train_coldway.numel() > 0:
-            j = int(torch.randint(0, train_coldway.shape[0], (1,)).item())
+            j = int(torch.randint(0, train_coldway.shape[0], (1,), generator=rng).item())
             mat[stage_i] = train_coldway[j].reshape(_COLDWAY_STAGES, _ROW_DIM)[stage_i]
         else:
             mat[stage_i] = ((lo + hi) / 2)[stage_i * _ROW_DIM : (stage_i + 1) * _ROW_DIM]
@@ -116,19 +119,21 @@ def compile_genome(
     train_bank: Optional[torch.Tensor] = None,
     *,
     total_wt: float = DEFAULT_TOTAL_WT,
+    rng: Optional[torch.Generator] = None,
 ) -> torch.Tensor:
     """
-  编译单个个体的 30 维基因组。
+    编译单个个体的 30 维基因组。
 
-  参数:
-      genome: (30,)
-      bounds: testenv/coldway box
-      projector: MaskedCompositeProjector（含 ti_balance）
-      train_bank: (M, 30) 训练样本，用于 coldway 种子
+    参数:
+        genome: (30,)
+        bounds: testenv/coldway box
+        projector: MaskedCompositeProjector（含 ti_balance）
+        train_bank: (M, 30) 训练样本，用于 coldway 种子
+        rng: 随机数生成器；传入后保证 --seed 可复现性
 
-  返回:
-      (30,) 编译后基因组
-  """
+    返回:
+        (30,) 编译后基因组
+    """
     g = genome.clone().float()
     train_cw = None
     if train_bank is not None and train_bank.numel() > 0:
@@ -136,12 +141,12 @@ def compile_genome(
 
     g[ELEMENT_SLICE] = compile_element(g[ELEMENT_SLICE], total_wt=total_wt)
     g[TESTENV_SLICE] = compile_testenv(g[TESTENV_SLICE], bounds)
-    g[COLDWAY_SLICE] = compile_coldway(g[COLDWAY_SLICE], bounds, train_cw)
+    g[COLDWAY_SLICE] = compile_coldway(g[COLDWAY_SLICE], bounds, train_cw, rng=rng)
 
     row = g.unsqueeze(0)
     row = projector.project(row)
     g = row.squeeze(0)
-    g[COLDWAY_SLICE] = compile_coldway(g[COLDWAY_SLICE], bounds, train_cw)
+    g[COLDWAY_SLICE] = compile_coldway(g[COLDWAY_SLICE], bounds, train_cw, rng=rng)
     return g
 
 

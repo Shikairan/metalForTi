@@ -5,11 +5,14 @@ ga_report.py — 帕累托前沿 JSON/TXT 报告与散点图。
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
+
+logger = logging.getLogger("Pareto.ga_report")
 
 from grd.feature_layout import (
     COLDWAY_SLICE,
@@ -75,6 +78,11 @@ def _individual_to_dict(
 
 
 def find_knee_index(individuals: List[Dict[str, Any]]) -> int:
+    """返回加权和最小个体的索引（f1 + f2 + 0.1*f3 最小）。
+
+    注意：这是加权标量折中解，而非几何意义上的 knee point。
+    JSON 输出中的 knee_index 字段沿用此语义。
+    """
     if not individuals:
         return 0
     scores = [
@@ -82,39 +90,6 @@ def find_knee_index(individuals: List[Dict[str, Any]]) -> int:
         for ind in individuals
     ]
     return int(min(range(len(scores)), key=lambda i: scores[i]))
-
-
-def build_pareto_summary(
-    front: List[Individual],
-    *,
-    target_ys: float,
-    target_fs: float,
-    objectives: str,
-    pop_size: int,
-    generations: int,
-    device: str,
-    paths: Dict[str, str],
-) -> Dict[str, Any]:
-    individuals = []
-    for ind in front:
-        if ind.fitness is None:
-            continue
-        individuals.append(_individual_to_dict(ind.genome, ind.fitness))
-    knee = find_knee_index(individuals) if individuals else 0
-    return {
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "target_ys": target_ys,
-        "target_fs": target_fs,
-        "objectives": objectives,
-        "population_size": pop_size,
-        "generations": generations,
-        "device": device,
-        "pareto_front_size": len(individuals),
-        "knee_index": knee,
-        "individuals": individuals,
-        "paths": paths,
-        "field_descriptions": FIELD_DESCRIPTIONS_CN,
-    }
 
 
 def build_archive_summary(
@@ -214,6 +189,7 @@ def write_pareto_scatter(path: Path, summary: Dict[str, Any]) -> None:
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
+        logger.warning("matplotlib 未安装，跳过散点图输出（%s）", path)
         return
 
     inds = summary.get("individuals", [])

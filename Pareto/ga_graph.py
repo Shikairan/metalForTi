@@ -13,21 +13,23 @@ import torch
 from grd.feature_layout import COLDWAY_DIM, ELEMENT_DIM, INPUT_DIM, TESTENV_DIM
 
 
-def _l2_normalize(x: np.ndarray, eps: float = 1e-12) -> np.ndarray:
-    n = np.linalg.norm(x, axis=-1, keepdims=True)
-    return x / np.maximum(n, eps)
-
-
 def _cosine_sim_rows(query: np.ndarray, bank: np.ndarray, eps: float = 1e-12) -> np.ndarray:
-    """query (d,), bank (N, d) -> (N,) cosine similarities."""
+    """query (d,), bank (N, d) -> (N,) cosine 相似度。
+
+    与训练管道（rgcn_dataloader）保持一致：双零向量相似度为 1.0，
+    单侧零向量相似度为 0.0。
+    """
     q = query.astype(np.float32, copy=False)
     b = bank.astype(np.float32, copy=False)
-    qn = np.linalg.norm(q)
-    if qn < eps:
-        qn = eps
+    qn = float(np.linalg.norm(q))
     bn = np.linalg.norm(b, axis=1)
-    bn = np.maximum(bn, eps)
-    sim = (b @ q) / (bn * qn)
+
+    if qn < eps:
+        # query 是零向量：仅对 bank 中同为零向量的行返回 1.0
+        return (bn < eps).astype(np.float32)
+
+    bn_safe = np.maximum(bn, eps)
+    sim = (b @ q) / (bn_safe * qn)
     return sim.astype(np.float32)
 
 

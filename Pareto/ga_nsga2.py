@@ -90,8 +90,8 @@ def assign_rank_and_crowding(
     population: List[Individual],
 ) -> None:
     objs = [ind.objectives for ind in population]
-    assert all(o is not None for o in objs)
-    objectives = [o for o in objs if o is not None]
+    assert all(o is not None for o in objs), "所有个体必须已设置 objectives 张量"
+    objectives: List[torch.Tensor] = objs  # type: ignore[assignment]
     fronts = fast_non_dominated_sort(objectives)
     for rank, front in enumerate(fronts):
         front_objs = [objectives[i] for i in front]
@@ -114,6 +114,10 @@ def tournament_select(
             best = c
         elif c.rank == best.rank and c.crowding > best.crowding:
             best = c
+        elif c.rank == best.rank and c.crowding == best.crowding:
+            # 随机打破完全平局，避免总选第一个候选
+            if torch.rand(1, generator=rng).item() < 0.5:
+                best = c
     return best
 
 
@@ -122,7 +126,8 @@ def environmental_selection(
     pop_size: int,
 ) -> List[Individual]:
     assign_rank_and_crowding(combined)
-    fronts = fast_non_dominated_sort([ind.objectives for ind in combined if ind.objectives is not None])
+    # 直接使用 combined 的完整 objectives 列表，避免过滤后索引与 combined 错位
+    fronts = fast_non_dominated_sort([ind.objectives for ind in combined])
     next_pop: List[Individual] = []
     for front in fronts:
         if len(next_pop) + len(front) <= pop_size:
