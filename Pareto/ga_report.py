@@ -50,6 +50,10 @@ FIELD_DESCRIPTIONS_CN: Dict[str, str] = {
     "fs_pred": "GNN 预测 FS",
     "nearest_train_idx": "最近邻训练样本节点索引",
     "knee_index": "加权和折中解在 individuals 中的索引",
+    "best_virtual_weighted_score": "虚拟（GNN 预测）节点中的最优加权分",
+    "virtual_pareto_front_size": "仅含 GA 设计（虚拟）节点的帕累托前沿个体数",
+    "virtual_knee_index": "虚拟节点折中解在 virtual_individuals 中的索引",
+    "virtual_individuals": "仅含 GA 设计（虚拟）节点的帕累托前沿列表",
     "field_descriptions": "字段中文说明",
 }
 
@@ -96,6 +100,7 @@ def build_archive_summary(
     archive: GeneArchive,
     front: List[Individual],
     *,
+    virtual_front: Optional[List[Individual]] = None,
     target_ys: float,
     target_fs: float,
     objectives: str,
@@ -104,7 +109,12 @@ def build_archive_summary(
     device: str,
     paths: Dict[str, str],
 ) -> Dict[str, Any]:
-    """从基因库与帕累托前沿构建最终报告。"""
+    """从基因库与帕累托前沿构建最终报告。
+
+    virtual_front: 仅含虚拟节点的帕累托前沿（GA 设计出的新合金）。
+    当原始节点因标签精确而霸占全库前沿时，virtual_front 提供独立视图，
+    让用户看到 GA 真正探索到的新合金设计。
+    """
     individuals = []
     for ind in front:
         if ind.fitness is None:
@@ -114,6 +124,17 @@ def build_archive_summary(
 
     best = archive.best_entry()
     best_weighted = weighted_score(best.fitness) if best is not None else None
+
+    best_virt = archive.best_virtual_entry()
+    best_virtual_weighted = weighted_score(best_virt.fitness) if best_virt is not None else None
+
+    virtual_individuals: List[Dict[str, Any]] = []
+    if virtual_front:
+        for ind in virtual_front:
+            if ind.fitness is None:
+                continue
+            virtual_individuals.append(_individual_to_dict(ind.genome, ind.fitness))
+    virtual_knee = find_knee_index(virtual_individuals) if virtual_individuals else 0
 
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -128,9 +149,13 @@ def build_archive_summary(
         "num_original": archive.num_original(),
         "num_virtual": archive.num_virtual(),
         "best_weighted_score": best_weighted,
+        "best_virtual_weighted_score": best_virtual_weighted,
         "pareto_front_size": len(individuals),
         "knee_index": knee,
         "individuals": individuals,
+        "virtual_pareto_front_size": len(virtual_individuals),
+        "virtual_knee_index": virtual_knee,
+        "virtual_individuals": virtual_individuals,
         "paths": paths,
         "field_descriptions": FIELD_DESCRIPTIONS_CN,
     }
@@ -139,6 +164,18 @@ def build_archive_summary(
 def write_pareto_json(path: Path, summary: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _fmt_individual_block(ind: Dict[str, Any], title: str) -> List[str]:
+    return [
+        title,
+        f"  f1 (|ΔYS|): {ind['f1_ys_abs_err']:.6f}",
+        f"  f2 (|ΔFS|): {ind['f2_fs_abs_err']:.6f}",
+        f"  f3 (锚定 L2): {ind.get('f3_anchor_l2', 0):.6f}",
+        f"  预测 YS/FS: {ind['ys_pred']:.6f} / {ind['fs_pred']:.6f}",
+        f"  Ti 余量 wt%: {ind['ti_balance_wt_pct']:.4f}",
+        "",
+    ]
 
 
 def write_ga_summary_txt(path: Path, summary: Dict[str, Any]) -> None:
@@ -155,25 +192,26 @@ def write_ga_summary_txt(path: Path, summary: Dict[str, Any]) -> None:
         f"进化代数: {summary.get('generations')}",
         f"每代子代数: {summary.get('offspring_per_generation', summary.get('population_size'))}",
         f"基因库规模: {summary.get('archive_size', '—')}（原始 {summary.get('num_original', '—')} + 虚拟 {summary.get('num_virtual', '—')}）",
-        f"帕累托前沿个体数: {summary.get('pareto_front_size')}",
+        f"帕累托前沿（全库）: {summary.get('pareto_front_size')} 个体",
+        f"帕累托前沿（仅虚拟）: {summary.get('virtual_pareto_front_size', '—')} 个体",
         "",
     ]
     if summary.get("best_weighted_score") is not None:
         lines.append(f"全库最优加权分: {summary['best_weighted_score']:.6f}")
-        lines.append("")
+    if summary.get("best_virtual_weighted_score") is not None:
+        lines.append(f"虚拟节点最优加权分: {summary['best_virtual_weighted_score']:.6f}")
+    lines.append("")
+
     inds = summary.get("individuals", [])
     knee = summary.get("knee_index", 0)
     if inds:
-        k = inds[knee]
-        lines.extend([
-            "【折中解（knee）】",
-            f"  f1 (|ΔYS|): {k['f1_ys_abs_err']:.6f}",
-            f"  f2 (|ΔFS|): {k['f2_fs_abs_err']:.6f}",
-            f"  f3 (锚定 L2): {k.get('f3_anchor_l2', 0):.6f}",
-            f"  预测 YS/FS: {k['ys_pred']:.6f} / {k['fs_pred']:.6f}",
-            f"  Ti 余量 wt%: {k['ti_balance_wt_pct']:.4f}",
-            "",
-        ])
+        lines.extend(_fmt_individual_block(inds[knee], "【全库折中解（knee）】"))
+
+    virt_inds = summary.get("virtual_individuals", [])
+    virt_knee = summary.get("virtual_knee_index", 0)
+    if virt_inds:
+        lines.extend(_fmt_individual_block(virt_inds[virt_knee], "【虚拟节点折中解（GA 新设计）】"))
+
     lines.append("【输出文件】")
     for key, val in summary.get("paths", {}).items():
         lines.append(f"  {key}: {val}")

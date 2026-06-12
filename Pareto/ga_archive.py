@@ -110,11 +110,66 @@ class GeneArchive:
             return None
         return min(self._entries, key=lambda e: weighted_score(e.fitness))
 
+    def best_virtual_entry(self) -> Optional[ArchiveEntry]:
+        """加权分最优的虚拟（GNN 预测）个体；若尚无虚拟节点则返回 None。"""
+        virtuals = [e for e in self._entries if not e.is_original]
+        if not virtuals:
+            return None
+        return min(virtuals, key=lambda e: weighted_score(e.fitness))
+
     def select_top_k(self, k: int) -> List[ArchiveEntry]:
         if k <= 0:
             return []
         ranked = sorted(self._entries, key=lambda e: weighted_score(e.fitness))
         return ranked[: min(k, len(ranked))]
+
+    def select_top_k_mixed(
+        self,
+        k: int,
+        orig_ratio: float = 0.3,
+    ) -> List[ArchiveEntry]:
+        """混合父本池：orig_ratio 比例来自原始节点，其余来自虚拟节点。
+
+        原始节点以实验标签适应度（无预测误差）天然优于 GNN 预测的虚拟节点，
+        若不设配额则父本池会被原始节点垄断，GA 无法进化出新设计。
+        通过保留固定比例的虚拟名额，保证 GA 在每代真正参与进化。
+
+        若虚拟节点尚不足额（如前几代），用排名靠后的原始节点补足。
+        若无虚拟节点（第 0 代初始化），回退到 select_top_k 全原始。
+        """
+        if k <= 0:
+            return []
+        originals = sorted(
+            [e for e in self._entries if e.is_original],
+            key=lambda e: weighted_score(e.fitness),
+        )
+        virtuals = sorted(
+            [e for e in self._entries if not e.is_original],
+            key=lambda e: weighted_score(e.fitness),
+        )
+        if not virtuals:
+            # 尚无虚拟节点，回退到全原始
+            return originals[:k]
+
+        n_orig = max(1, round(k * orig_ratio))
+        n_virt = k - n_orig
+
+        top_orig = originals[:min(n_orig, len(originals))]
+        top_virt = virtuals[:min(n_virt, len(virtuals))]
+
+        # 若某一方不足，从另一方补足
+        shortage = k - len(top_orig) - len(top_virt)
+        if shortage > 0:
+            if len(top_virt) < n_virt:
+                # 虚拟节点不足，从原始节点补
+                extra = originals[len(top_orig): len(top_orig) + shortage]
+                top_orig = top_orig + extra
+            else:
+                # 原始节点不足，从虚拟节点补
+                extra = virtuals[len(top_virt): len(top_virt) + shortage]
+                top_virt = top_virt + extra
+
+        return top_orig + top_virt
 
     def to_individuals(self, evaluator: Optional[FitnessEvaluator] = None) -> List:
         from Pareto.ga_nsga2 import Individual

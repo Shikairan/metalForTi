@@ -59,10 +59,10 @@ def _log_generation(
     new_virtual_count: int = 0,
     front_candidates: Optional[List[ArchiveEntry]] = None,
 ) -> None:
-    """打印当前代全库最优个体的规整文本块。
+    """打印当前代最优个体的规整文本块，并单独显示虚拟节点最优。
 
-    front_candidates: 用于计算帕累托前沿的候选集（默认为当前 breeders 精英池）。
-    传入子集而非全库，将 O(n²) 帕累托排序限制在精英池规模，避免每代全库重排序。
+    front_candidates: 用于计算帕累托前沿的候选集（混合父本池）。
+    传入子集而非全库，将 O(n²) 帕累托排序限制在精英池规模。
     """
     best_entry = archive.best_entry()
     if best_entry is None:
@@ -88,6 +88,21 @@ def _log_generation(
         gene_source=best_entry.source_label(),
     )
     logger.info("%s", block)
+
+    # 单独显示虚拟节点中的最优，让 GA 设计进展独立可见
+    best_virt = archive.best_virtual_entry()
+    if best_virt is not None:
+        virt_block = format_generation_block(
+            f"{gen_label} [虚拟最优]",
+            front_size=0,
+            genome=best_virt.genome,
+            fitness=best_virt.fitness,
+            target_ys=target_ys,
+            target_fs=target_fs,
+            ys_fs_from_labels=False,
+            gene_source=best_virt.source_label(),
+        )
+        logger.info("%s", virt_block)
 
 
 def _resolve_device(requested: str, force_cpu: bool) -> str:
@@ -122,6 +137,17 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--element-thr", type=float, default=0.8)
     p.add_argument("--testenv-thr", type=float, default=0.8)
     p.add_argument("--coldway-thr", type=float, default=0.8)
+    p.add_argument(
+        "--orig-breeder-ratio",
+        type=float,
+        default=0.3,
+        help=(
+            "父本池中原始节点的占比（0~1）。"
+            "原始节点以实验标签评估（无预测误差），天然优于 GNN 预测的虚拟节点，"
+            "设置此比例可保证虚拟节点有繁殖配额，让 GA 真正进化出新设计。"
+            "设为 1.0 等价于原全原始选择；设为 0.0 则仅用虚拟节点（第 0 代除外）。"
+        ),
+    )
     p.add_argument("--force-cpu", action="store_true")
     return p.parse_args()
 
@@ -190,12 +216,15 @@ def main() -> None:
         coldway_thr=args.coldway_thr,
     )
 
+    orig_ratio = max(0.0, min(1.0, args.orig_breeder_ratio))
     archive = GeneArchive.from_graph(x, ys, fs, evaluator)
-    breeders = archive.select_top_k(args.pop_size)
+    # 代 0 尚无虚拟节点，select_top_k_mixed 自动回退到全原始
+    breeders = archive.select_top_k_mixed(args.pop_size, orig_ratio)
     logger.info(
-        "基因库已初始化：%d 原始节点，代 0 选 top %d 父本（无 GNN forward）",
+        "基因库已初始化：%d 原始节点，代 0 选 top %d 父本（原始占比 %.0f%%，无 GNN forward）",
         archive.size(),
         len(breeders),
+        orig_ratio * 100,
     )
     _log_generation(
         archive,
@@ -219,7 +248,8 @@ def main() -> None:
         )
         fitness_list = [evaluator.evaluate_one(g) for g in children_genomes]
         archive.add_virtual_batch(children_genomes, fitness_list, generation=gen)
-        breeders = archive.select_top_k(args.pop_size)
+        # 混合父本池：orig_ratio 比例来自原始节点，其余来自虚拟节点
+        breeders = archive.select_top_k_mixed(args.pop_size, orig_ratio)
         _log_generation(
             archive,
             f"代 {gen}",
@@ -230,24 +260,35 @@ def main() -> None:
             front_candidates=breeders,
         )
 
+    # 全库帕累托前沿（含原始 + 虚拟）
     individuals = archive.to_individuals(evaluator)
     front = get_pareto_front(individuals)
+
+    # 虚拟节点专属帕累托前沿（GA 真正设计出的新合金）
+    virtual_entries = [e for e in archive.entries if not e.is_original]
+    virtual_individuals = _entries_to_individuals(virtual_entries, evaluator)
+    virtual_front = get_pareto_front(virtual_individuals) if virtual_individuals else []
+
     logger.info(
-        "完成。基因库 %d（原始 %d + 虚拟 %d），帕累托前沿 %d 个体",
+        "完成。基因库 %d（原始 %d + 虚拟 %d），全库帕累托 %d，虚拟专属帕累托 %d",
         archive.size(),
         archive.num_original(),
         archive.num_virtual(),
         len(front),
+        len(virtual_front),
     )
 
     paths = {
         "pareto_json": str((args.out_dir / "pareto_front.json").resolve()),
+        "virtual_pareto_json": str((args.out_dir / "virtual_pareto_front.json").resolve()),
         "summary_txt": str((args.out_dir / "ga_summary.txt").resolve()),
         "scatter_png": str((args.out_dir / "pareto_scatter.png").resolve()),
+        "virtual_scatter_png": str((args.out_dir / "virtual_pareto_scatter.png").resolve()),
     }
     summary = build_archive_summary(
         archive,
         front,
+        virtual_front=virtual_front,
         target_ys=args.target_ys,
         target_fs=args.target_fs,
         objectives=args.objectives,
@@ -259,6 +300,24 @@ def main() -> None:
     write_pareto_json(args.out_dir / "pareto_front.json", summary)
     write_ga_summary_txt(args.out_dir / "ga_summary.txt", summary)
     write_pareto_scatter(args.out_dir / "pareto_scatter.png", summary)
+
+    # 仅含虚拟节点的报告与散点图
+    if virtual_front:
+        virtual_summary = build_archive_summary(
+            archive,
+            virtual_front,
+            virtual_front=virtual_front,
+            target_ys=args.target_ys,
+            target_fs=args.target_fs,
+            objectives=args.objectives,
+            offspring_per_generation=args.pop_size,
+            generations=args.generations,
+            device=device,
+            paths=paths,
+        )
+        write_pareto_json(args.out_dir / "virtual_pareto_front.json", virtual_summary)
+        write_pareto_scatter(args.out_dir / "virtual_pareto_scatter.png", virtual_summary)
+
     logger.info("已写入 %s", args.out_dir)
 
 
