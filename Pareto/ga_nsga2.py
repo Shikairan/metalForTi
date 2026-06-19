@@ -149,6 +149,16 @@ def get_pareto_front(population: List[Individual]) -> List[Individual]:
     return [ind for ind in population if ind.rank == 0]
 
 
+def pareto_representative(population: List[Individual]) -> Optional[Individual]:
+    """第一非支配层中拥挤距离最大者（日志/展示用）。"""
+    if not population:
+        return None
+    front = get_pareto_front(population)
+    if not front:
+        return population[0]
+    return max(front, key=lambda ind: ind.crowding)
+
+
 def nsga2_evolve(
     population: List[Individual],
     pop_size: int,

@@ -165,7 +165,7 @@ def format_generation_block(
     virtual_gene_source: Optional[str] = None,
     virtual_same_as_overall: bool = False,
 ) -> str:
-    """生成单代日志块：全库最优 + 历史虚拟最优（不含 [INFO] 前缀）。"""
+    """生成单代日志块：种群帕累托代表（不含 [INFO] 前缀）。"""
     meta_parts = [f"帕累托前沿 {front_size} 个体"]
     if archive_size is not None:
         meta_parts.append(f"基因库 {archive_size}")
@@ -180,7 +180,7 @@ def format_generation_block(
     ]
     lines.extend(
         _format_one_solution(
-            "全库最优",
+            "种群帕累托代表",
             genome,
             fitness,
             target_ys=target_ys,
@@ -193,18 +193,16 @@ def format_generation_block(
     if virtual_genome is not None and virtual_fitness is not None:
         lines.extend(
             _format_one_solution(
-                "历史虚拟最优",
+                "辅助展示",
                 virtual_genome,
                 virtual_fitness,
                 target_ys=target_ys,
                 target_fs=target_fs,
                 ys_fs_from_labels=False,
                 gene_source=virtual_gene_source,
-                same_as_note="（与全库最优为同一个体）" if virtual_same_as_overall else None,
+                same_as_note="（与帕累托代表为同一个体）" if virtual_same_as_overall else None,
             )
         )
-    else:
-        lines.extend(["  【历史虚拟最优】", "    （尚无虚拟个体）", ""])
 
     lines.append(_LINE)
     return "\n".join(lines)

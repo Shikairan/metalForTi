@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-run_ga_design.py — Pareto 遗传逆设计 CLI 入口。
+run_ga_design.py — NSGA-II 帕累托遗传逆设计 CLI 入口。
 
 用法（metalForTi 根目录）:
   python -m Pareto.run_ga_design --target-ys <float> --target-fs <float>
@@ -17,11 +17,18 @@ import torch
 
 from grd.feature_layout import bounds_from_train_x, build_projector
 from grd.io_utils import load_dual_rgat, load_graph_bundle, merge_hetero_edges
-from Pareto.ga_archive import ArchiveEntry, GeneArchive, random_pair_select
-from Pareto.ga_evaluate import FitnessEvaluator
+from Pareto.ga_archive import ArchiveEntry, GeneArchive
+from Pareto.ga_evaluate import FitnessEvaluator, FitnessResult
 from Pareto.ga_log_format import format_generation_block
 from Pareto.ga_graph import GraphContext
-from Pareto.ga_nsga2 import Individual, get_pareto_front
+from Pareto.ga_nsga2 import (
+    Individual,
+    assign_rank_and_crowding,
+    environmental_selection,
+    get_pareto_front,
+    pareto_representative,
+    tournament_select,
+)
 from Pareto.ga_compile import compile_genome
 from Pareto.ga_operators import GAConfig, crossover_and_mutate
 from Pareto.ga_report import (
@@ -34,67 +41,66 @@ from Pareto.ga_report import (
 logger = logging.getLogger("Pareto.run_ga_design")
 
 
+def _entry_to_individual(entry: ArchiveEntry, evaluator: FitnessEvaluator) -> Individual:
+    return Individual(
+        genome=entry.genome.clone(),
+        fitness=entry.fitness,
+        objectives=evaluator.objectives_tensor(entry.fitness),
+    )
+
+
 def _entries_to_individuals(
     entries: List[ArchiveEntry],
     evaluator: FitnessEvaluator,
 ) -> List[Individual]:
-    """将 ArchiveEntry 列表转换为带 objectives 的 Individual 列表。"""
-    return [
-        Individual(
-            genome=e.genome.clone(),
-            fitness=e.fitness,
-            objectives=evaluator.objectives_tensor(e.fitness),
-        )
-        for e in entries
-    ]
+    return [_entry_to_individual(entry, evaluator) for entry in entries]
+
+
+def _find_archive_entry(archive: GeneArchive, ind: Individual) -> Optional[ArchiveEntry]:
+    g = ind.genome.detach().cpu()
+    for e in archive.entries:
+        if torch.allclose(e.genome.cpu(), g, atol=1e-5, rtol=0):
+            return e
+    return None
 
 
 def _log_generation(
     archive: GeneArchive,
     gen_label: str,
     evaluator: FitnessEvaluator,
+    population: List[Individual],
     *,
     target_ys: float,
     target_fs: float,
     ys_fs_from_labels: bool = False,
     new_virtual_count: int = 0,
-    front_candidates: Optional[List[ArchiveEntry]] = None,
 ) -> None:
-    """打印当前代全库最优个体的规整文本块。
-
-    front_candidates: 用于计算帕累托前沿的候选集（默认为当前 breeders 精英池）。
-    传入子集而非全库，将 O(n²) 帕累托排序限制在精英池规模，避免每代全库重排序。
-    """
-    best_entry = archive.best_entry()
-    if best_entry is None:
-        logger.warning("%s: 无有效个体", gen_label)
+    """打印当前代种群帕累托代表与前沿规模。"""
+    if not population:
+        logger.warning("%s: 种群为空", gen_label)
         return
 
-    best_virtual = archive.best_virtual_entry()
+    rep = pareto_representative(population)
+    if rep is None or rep.fitness is None:
+        return
 
-    if front_candidates is not None:
-        individuals = _entries_to_individuals(front_candidates, evaluator)
-    else:
-        individuals = archive.to_individuals(evaluator)
-    front = get_pareto_front(individuals)
+    front = get_pareto_front(population)
+    entry = _find_archive_entry(archive, rep)
+    gene_source = entry.source_label() if entry is not None else "当前种群帕累托代表"
 
     block = format_generation_block(
         gen_label,
         len(front),
-        best_entry.genome,
-        best_entry.fitness,
+        rep.genome,
+        rep.fitness,
         target_ys=target_ys,
         target_fs=target_fs,
         ys_fs_from_labels=ys_fs_from_labels,
         archive_size=archive.size(),
         new_virtual_count=new_virtual_count,
-        gene_source=best_entry.source_label(),
-        virtual_genome=best_virtual.genome if best_virtual is not None else None,
-        virtual_fitness=best_virtual.fitness if best_virtual is not None else None,
-        virtual_gene_source=best_virtual.source_label() if best_virtual is not None else None,
-        virtual_same_as_overall=(
-            best_virtual is not None and best_virtual is best_entry
-        ),
+        gene_source=gene_source,
+        virtual_genome=None,
+        virtual_fitness=None,
     )
     logger.info("%s", block)
 
@@ -110,7 +116,7 @@ def _resolve_device(requested: str, force_cpu: bool) -> str:
 
 def _parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parents[1]
-    p = argparse.ArgumentParser(description="Pareto 基因库累积遗传逆设计")
+    p = argparse.ArgumentParser(description="NSGA-II 帕累托遗传逆设计")
     p.add_argument("--target-ys", type=float, required=True, help="目标 YS（与 ys.pt 同量纲）")
     p.add_argument("--target-fs", type=float, required=True, help="目标 FS（与 fs.pt 同量纲）")
     p.add_argument("--data-dir", type=Path, default=root / "gnnDir" / "gnndataPT" / "r-gatPT")
@@ -121,13 +127,7 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--rgat-dir", type=Path, default=root / "modelAll")
     p.add_argument("--out-dir", type=Path, default=root / "Pareto" / "outputs_ga")
-    p.add_argument("--pop-size", type=int, default=604, help="每代杂交子代数（GNN 评估数）")
-    p.add_argument(
-        "--virtual-pool-size",
-        type=int,
-        default=604,
-        help="虚拟精英池规模（历史虚拟加权 top-k，与原始池合并为父本池）",
-    )
+    p.add_argument("--pop-size", type=int, default=604, help="NSGA-II 种群规模（每代子代数）")
     p.add_argument("--generations", type=int, default=150)
     p.add_argument("--objectives", choices=["two", "three"], default="three")
     p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
@@ -142,7 +142,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _make_offspring(
-    breeders: List[ArchiveEntry],
+    parents: List[Individual],
     pop_size: int,
     x_train: torch.Tensor,
     bounds,
@@ -150,9 +150,12 @@ def _make_offspring(
     rng: torch.Generator,
     ga_cfg: GAConfig,
 ) -> List[torch.Tensor]:
+    """NSGA-II 二元锦标赛选父，产出 pop_size 个子代基因组。"""
+    assign_rank_and_crowding(parents)
     children: List[torch.Tensor] = []
     while len(children) < pop_size:
-        p1, p2 = random_pair_select(breeders, rng)
+        p1 = tournament_select(parents, rng)
+        p2 = tournament_select(parents, rng)
         c1, c2 = crossover_and_mutate(
             p1.genome,
             p2.genome,
@@ -168,6 +171,23 @@ def _make_offspring(
     return children
 
 
+def _evaluate_offspring(
+    genomes: List[torch.Tensor],
+    evaluator: FitnessEvaluator,
+) -> List[Individual]:
+    out: List[Individual] = []
+    for g in genomes:
+        fit = evaluator.evaluate_one(g)
+        out.append(
+            Individual(
+                genome=g,
+                fitness=fit,
+                objectives=evaluator.objectives_tensor(fit),
+            )
+        )
+    return out
+
+
 def main() -> None:
     args = _parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
@@ -175,7 +195,7 @@ def main() -> None:
     rng = torch.Generator().manual_seed(args.seed)
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("使用设备: %s", device)
+    logger.info("使用设备: %s | 算法: NSGA-II（非支配排序 + 拥挤距离）", device)
     x, ys, fs, train_mask, _ = load_graph_bundle(args.data_dir)
     graph = torch.load(args.data_dir / "material_graph.pt", map_location="cpu", weights_only=False)
     edge_index, edge_type = merge_hetero_edges(graph)
@@ -212,33 +232,32 @@ def main() -> None:
     logger.info("已对基因库 %d 条基因组执行 coldway/约束 compile 修复", n_repaired)
 
     n_orig = archive.num_original()
+    original_parents = _entries_to_individuals(archive.original_entries(), evaluator)
+    population: List[Individual] = []
+
     logger.info(
-        "基因库已初始化：%d 原始节点（固定父本池），虚拟精英池上限 %d",
+        "基因库已初始化：%d 原始节点 | 种群规模 %d | 目标 %s",
         n_orig,
-        args.virtual_pool_size,
+        args.pop_size,
+        args.objectives,
     )
     _log_generation(
         archive,
-        "代 0（原始池就绪）",
+        "代 0（原始池就绪，标签适应度）",
         evaluator,
+        original_parents[: args.pop_size] if len(original_parents) > args.pop_size else original_parents,
         target_ys=args.target_ys,
         target_fs=args.target_fs,
         ys_fs_from_labels=True,
-        front_candidates=archive.original_entries(),
     )
 
     for gen in range(1, args.generations + 1):
-        breeder_pool = archive.build_breeder_pool(args.virtual_pool_size)
-        n_virt_elite = len(breeder_pool) - n_orig
-        logger.info(
-            "代 %d 父本池：原始 %d + 虚拟精英 %d = %d（随机配对杂交）",
-            gen,
-            n_orig,
-            n_virt_elite,
-            len(breeder_pool),
-        )
+        parent_pool = original_parents if not population else population
+        pool_label = "604 原始（标签）" if not population else f"种群 {len(population)}"
+        logger.info("代 %d 父本: %s | 二元锦标赛选父", gen, pool_label)
+
         children_genomes = _make_offspring(
-            breeder_pool,
+            parent_pool,
             args.pop_size,
             x_train,
             bounds,
@@ -246,23 +265,35 @@ def main() -> None:
             rng,
             ga_cfg,
         )
-        fitness_list = [evaluator.evaluate_one(g) for g in children_genomes]
+        offspring = _evaluate_offspring(children_genomes, evaluator)
+        fitness_list: List[FitnessResult] = [ind.fitness for ind in offspring if ind.fitness is not None]
         archive.add_virtual_batch(children_genomes, fitness_list, generation=gen)
-        offspring_batch = archive.latest_virtual_batch(args.pop_size)
+
+        if not population:
+            population = environmental_selection(offspring, args.pop_size)
+        else:
+            population = environmental_selection(population + offspring, args.pop_size)
+
+        front = get_pareto_front(population)
+        logger.info(
+            "代 %d 环境选择完成：种群 %d，帕累托前沿 %d",
+            gen,
+            len(population),
+            len(front),
+        )
         _log_generation(
             archive,
-            f"代 {gen}（本代 {args.pop_size} 子代已排序入库）",
+            f"代 {gen}（NSGA-II 环境选择后）",
             evaluator,
+            population,
             target_ys=args.target_ys,
             target_fs=args.target_fs,
             new_virtual_count=args.pop_size,
-            front_candidates=offspring_batch,
         )
 
-    individuals = archive.to_individuals(evaluator)
-    front = get_pareto_front(individuals)
+    front = get_pareto_front(population)
     logger.info(
-        "完成。基因库 %d（原始 %d + 虚拟 %d），帕累托前沿 %d 个体",
+        "完成。基因库 %d（原始 %d + 虚拟 %d），最终种群帕累托前沿 %d 个体",
         archive.size(),
         archive.num_original(),
         archive.num_virtual(),
@@ -281,10 +312,10 @@ def main() -> None:
         target_fs=args.target_fs,
         objectives=args.objectives,
         offspring_per_generation=args.pop_size,
-        virtual_pool_size=args.virtual_pool_size,
         generations=args.generations,
         device=device,
         paths=paths,
+        selection_method="NSGA-II",
     )
     write_pareto_json(args.out_dir / "pareto_front.json", summary)
     write_ga_summary_txt(args.out_dir / "ga_summary.txt", summary)

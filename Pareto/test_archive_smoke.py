@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""冒烟：每代仅子代 forward；父本池 = 原始 + 虚拟精英。"""
+"""冒烟：NSGA-II 每代仅子代 forward。"""
 
 from __future__ import annotations
 
@@ -11,10 +11,12 @@ import torch
 
 from grd.feature_layout import bounds_from_train_x, build_projector
 from grd.io_utils import load_dual_rgat, load_graph_bundle, merge_hetero_edges
-from Pareto.ga_archive import GeneArchive, random_pair_select
+from Pareto.ga_archive import GeneArchive
 from Pareto.ga_evaluate import FitnessEvaluator
 from Pareto.ga_graph import GraphContext
+from Pareto.ga_nsga2 import Individual, environmental_selection
 from Pareto.ga_operators import GAConfig, crossover_and_mutate
+from Pareto.run_ga_design import _entries_to_individuals, _make_offspring
 
 
 class ArchiveForwardCountTest(unittest.TestCase):
@@ -35,7 +37,6 @@ class ArchiveForwardCountTest(unittest.TestCase):
         x_train = x[train_mask].clone()
 
         pop_size = 10
-        virtual_pool_size = 10
         generations = 2
         target_ys = float(ys.median().item())
         target_fs = float(fs.median().item())
@@ -56,29 +57,40 @@ class ArchiveForwardCountTest(unittest.TestCase):
 
         rng = torch.Generator().manual_seed(42)
         ga_cfg = GAConfig()
+        original_parents = _entries_to_individuals(archive.original_entries(), evaluator)
+        population: list[Individual] = []
 
         with patch.object(evaluator, "evaluate_one", side_effect=counting_eval):
             self.assertEqual(forward_count, 0)
 
             for gen in range(1, generations + 1):
-                breeder_pool = archive.build_breeder_pool(virtual_pool_size)
-                self.assertEqual(len(archive.original_entries()), 604)
-                children = []
-                while len(children) < pop_size:
-                    p1, p2 = random_pair_select(breeder_pool, rng)
-                    c1, c2 = crossover_and_mutate(
-                        p1.genome, p2.genome, x_train, bounds, projector, rng, ga_cfg
+                parent_pool = original_parents if not population else population
+                children_genomes = _make_offspring(
+                    parent_pool, pop_size, x_train, bounds, projector, rng, ga_cfg
+                )
+                offspring = []
+                for g in children_genomes:
+                    fit = evaluator.evaluate_one(g)
+                    offspring.append(
+                        Individual(
+                            genome=g,
+                            fitness=fit,
+                            objectives=evaluator.objectives_tensor(fit),
+                        )
                     )
-                    children.append(c1)
-                    if len(children) < pop_size:
-                        children.append(c2)
-                fits = [evaluator.evaluate_one(g) for g in children]
-                archive.add_virtual_batch(children, fits, generation=gen)
+                archive.add_virtual_batch(
+                    children_genomes,
+                    [ind.fitness for ind in offspring],
+                    generation=gen,
+                )
+                if not population:
+                    population = environmental_selection(offspring, pop_size)
+                else:
+                    population = environmental_selection(population + offspring, pop_size)
 
         self.assertEqual(forward_count, pop_size * generations)
         self.assertEqual(archive.size(), 604 + pop_size * generations)
-        elite = archive.select_top_virtual_k(virtual_pool_size)
-        self.assertLessEqual(len(elite), virtual_pool_size)
+        self.assertEqual(len(population), pop_size)
 
 
 if __name__ == "__main__":

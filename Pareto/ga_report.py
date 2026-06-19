@@ -35,8 +35,8 @@ FIELD_DESCRIPTIONS_CN: Dict[str, str] = {
     "archive_size": "基因库总条目数",
     "num_original": "原始图节点条目数",
     "num_virtual": "累积虚拟个体条目数",
-    "offspring_per_generation": "每代新增虚拟子代数",
-    "virtual_pool_size": "虚拟精英池规模（父本池中的历史虚拟 top-k）",
+    "offspring_per_generation": "每代新增子代数",
+    "selection_method": "父本/存活选择算法（NSGA-II）",
     "pareto_front_size": "第一非支配层个体数",
     "individuals": "帕累托前沿个体列表",
     "genome_30d": "30 维基因组（element+testenv+coldway）",
@@ -51,8 +51,7 @@ FIELD_DESCRIPTIONS_CN: Dict[str, str] = {
     "fs_pred": "GNN 预测 FS",
     "nearest_train_idx": "最近邻训练样本在原始图中的节点 id（0 基准，对应 material_graph 节点序号）",
     "knee_index": "加权和折中解在 individuals 中的索引",
-    "best_overall": "全库加权最优个体",
-    "best_virtual": "历史虚拟个体加权最优",
+    "pareto_representative": "最终种群帕累托代表（拥挤距离最大）",
     "gene_source": "基因来源（原始/杂交虚拟）",
     "field_descriptions": "字段中文说明",
 }
@@ -130,12 +129,12 @@ def build_archive_summary(
     target_fs: float,
     objectives: str,
     offspring_per_generation: int,
-    virtual_pool_size: int,
     generations: int,
     device: str,
     paths: Dict[str, str],
+    selection_method: str = "NSGA-II",
 ) -> Dict[str, Any]:
-    """从基因库与帕累托前沿构建最终报告。"""
+    """从最终种群帕累托前沿构建报告。"""
     individuals = []
     for ind in front:
         if ind.fitness is None:
@@ -143,11 +142,13 @@ def build_archive_summary(
         individuals.append(_individual_to_dict(ind.genome, ind.fitness))
     knee = find_knee_index(individuals) if individuals else 0
 
-    best = archive.best_entry()
-    best_virtual = archive.best_virtual_entry()
-    best_weighted = weighted_score(best.fitness) if best is not None else None
-    best_virtual_weighted = (
-        weighted_score(best_virtual.fitness) if best_virtual is not None else None
+    from Pareto.ga_nsga2 import pareto_representative
+
+    rep = pareto_representative(front) if front else None
+    rep_dict = (
+        _individual_to_dict(rep.genome, rep.fitness)
+        if rep is not None and rep.fitness is not None
+        else None
     )
 
     return {
@@ -155,18 +156,15 @@ def build_archive_summary(
         "target_ys": target_ys,
         "target_fs": target_fs,
         "objectives": objectives,
+        "selection_method": selection_method,
         "population_size": offspring_per_generation,
         "offspring_per_generation": offspring_per_generation,
-        "virtual_pool_size": virtual_pool_size,
         "generations": generations,
         "device": device,
         "archive_size": archive.size(),
         "num_original": archive.num_original(),
         "num_virtual": archive.num_virtual(),
-        "best_weighted_score": best_weighted,
-        "best_virtual_weighted_score": best_virtual_weighted,
-        "best_overall": _entry_to_dict(best) if best is not None else None,
-        "best_virtual": _entry_to_dict(best_virtual) if best_virtual is not None else None,
+        "pareto_representative": rep_dict,
         "pareto_front_size": len(individuals),
         "knee_index": knee,
         "individuals": individuals,
@@ -190,21 +188,15 @@ def write_ga_summary_txt(path: Path, summary: Dict[str, Any]) -> None:
         f"目标 YS: {summary.get('target_ys')}",
         f"目标 FS: {summary.get('target_fs')}",
         f"优化目标: {summary.get('objectives')}",
+        f"选择算法: {summary.get('selection_method', 'NSGA-II')}",
         f"设备: {summary.get('device')}",
         f"进化代数: {summary.get('generations')}",
-        f"每代子代数: {summary.get('offspring_per_generation', summary.get('population_size'))}",
-        f"虚拟精英池: {summary.get('virtual_pool_size', '—')}",
+        f"种群规模: {summary.get('offspring_per_generation', summary.get('population_size'))}",
         f"基因库规模: {summary.get('archive_size', '—')}（原始 {summary.get('num_original', '—')} + 虚拟 {summary.get('num_virtual', '—')}）",
         f"帕累托前沿个体数: {summary.get('pareto_front_size')}",
         "",
     ]
-    if summary.get("best_weighted_score") is not None:
-        lines.append(f"全库最优加权分: {summary['best_weighted_score']:.6f}")
-    if summary.get("best_virtual_weighted_score") is not None:
-        lines.append(f"历史虚拟最优加权分: {summary['best_virtual_weighted_score']:.6f}")
-    lines.append("")
-    _append_best_dict_lines(lines, "全库最优", summary.get("best_overall"))
-    _append_best_dict_lines(lines, "历史虚拟最优", summary.get("best_virtual"))
+    _append_best_dict_lines(lines, "种群帕累托代表", summary.get("pareto_representative"))
     inds = summary.get("individuals", [])
     knee = summary.get("knee_index", 0)
     if inds:
