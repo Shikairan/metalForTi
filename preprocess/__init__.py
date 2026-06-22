@@ -18,6 +18,7 @@ from preprocess.preprocess_datagnn_repro import (
     load_testenv_stats_np,
     normalize_targets_from_data1123,
     normalize_targets_physical,
+    physical_label_means_for_targets,
     resolve_user_targets,
     ResolvedTargets,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "load_testenv_stats_np",
     "normalize_targets_from_data1123",
     "normalize_targets_physical",
+    "physical_label_means_for_targets",
     "resolve_user_targets",
     "ResolvedTargets",
 ]

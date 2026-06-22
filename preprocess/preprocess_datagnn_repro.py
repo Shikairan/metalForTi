@@ -97,10 +97,35 @@ def denormalize_targets_to_data1123(
 
 
 def label_means_from_arrays(ys, fs) -> Tuple[float, float]:
-    """与 forward_preprocess(normalize_targets=True) 一致：全表标签算术均值。"""
+    """已归一化标签张量（ys.pt/fs.pt）的算术均值；**不可**用于物理量逆变换。"""
     y = np.asarray(ys, dtype=np.float64)
     f = np.asarray(fs, dtype=np.float64)
     return float(y.mean()), float(f.mean())
+
+
+def physical_label_means_for_targets(
+    data1123_path: Path | None = None,
+) -> Tuple[float, float]:
+    """
+    全表物理标签均值，用于 data1123 ↔ 模型量纲换算。
+
+    返回 (mean_YS_MPa, mean_FS_dataOri2)；与 forward_preprocess 中 YS/FS 归一化分母一致。
+  勿用 ys.pt/fs.pt 的均值（已归一化，≈1）。
+    """
+    if data1123_path is not None and data1123_path.is_file():
+        ys_vals: list[float] = []
+        fs_vals: list[float] = []
+        with data1123_path.open("r", newline="", encoding="utf-8-sig") as f:
+            for row in csv.DictReader(f):
+                if not row:
+                    continue
+                ys_vals.append(float(row["YS"]))
+                fs_vals.append(float(row["FS"]))
+        if ys_vals:
+            ys_mean = float(np.mean(ys_vals))
+            fs_mean_dataori2 = float(np.mean(fs_vals)) * FS_DATA1123_TO_DATAORI2_SCALE
+            return ys_mean, fs_mean_dataori2
+    return DEFAULT_YS_MEAN, DEFAULT_FS_MEAN
 
 
 @dataclass(frozen=True)

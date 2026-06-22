@@ -78,5 +78,6 @@ python -m Pareto.ga_archive
 python -m Pareto.test_archive_smoke
 python -m Pareto.test_pareto_output_restore
 python -m Pareto.test_pareto_coldway_display
+python -m Pareto.test_pareto_label_means
 python -m Pareto.test_pareto_target_scale
 ```

@@ -16,8 +16,8 @@ from typing import List, Optional
 import torch
 
 from preprocess.preprocess_datagnn_repro import (
-    label_means_from_arrays,
     load_testenv_stats_np,
+    physical_label_means_for_targets,
     resolve_user_targets,
 )
 from grd.feature_layout import bounds_from_train_x, build_projector
@@ -125,13 +125,12 @@ def _resolve_device(requested: str, force_cpu: bool) -> str:
 def _resolve_targets(
     target_ys: float,
     target_fs: float,
-    ys: torch.Tensor,
-    fs: torch.Tensor,
     *,
     targets_physical: bool,
+    data1123_path: Path,
 ):
     """data1123 原始目标 → 模型量纲 + 物理量。"""
-    ys_mean, fs_mean = label_means_from_arrays(ys.cpu().numpy(), fs.cpu().numpy())
+    ys_mean, fs_mean = physical_label_means_for_targets(data1123_path)
     resolved = resolve_user_targets(
         target_ys,
         target_fs,
@@ -263,9 +262,8 @@ def main() -> None:
     ) = _resolve_targets(
         args.target_ys,
         args.target_fs,
-        ys,
-        fs,
         targets_physical=targets_physical,
+        data1123_path=root / "preprocess" / "data1123.csv",
     )
     te_mean, te_std = load_testenv_stats_np(_resolve_testenv_stats_path(args.data_dir, root))
     restore = OutputRestoreContext(
