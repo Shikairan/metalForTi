@@ -76,6 +76,7 @@ FIELD_DESCRIPTIONS_CN: Dict[str, str] = {
     "knee_index": "加权和折中解在 individuals 中的索引",
     "pareto_representative": "最终种群帕累托代表（拥挤距离最大）",
     "best_virtual": "基因库历史最优虚拟个体（加权分 f1+f2+0.1*f3 最小）",
+    "fixed_testenv": "用户锁定的试验环境（data1123 tem/sr）；省略表示 testenv 参与遗传",
     "gene_source": "基因来源（原始/杂交虚拟）",
     "field_descriptions": "字段中文说明",
 }
@@ -181,6 +182,7 @@ def build_archive_summary(
     targets_physical: bool = False,
     label_means: Optional[Dict[str, float]] = None,
     restore: Optional[OutputRestoreContext] = None,
+    fixed_testenv: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """从最终种群帕累托前沿构建报告。"""
     if restore is None:
@@ -225,6 +227,7 @@ def build_archive_summary(
         "num_virtual": archive.num_virtual(),
         "pareto_representative": rep_dict,
         "best_virtual": best_virtual_dict,
+        "fixed_testenv": fixed_testenv,
         "pareto_front_size": len(individuals),
         "knee_index": knee,
         "individuals": individuals,
@@ -258,6 +261,12 @@ def write_ga_summary_txt(path: Path, summary: Dict[str, Any]) -> None:
         f"帕累托前沿个体数: {summary.get('pareto_front_size')}",
         "",
     ]
+    fx = summary.get("fixed_testenv")
+    if fx and fx.get("testenv_locked"):
+        lines.extend([
+            f"试验环境锁定: tem={fx.get('fixed_tem')}  sr={fx.get('fixed_sr')}（data1123）",
+            "",
+        ])
     _append_best_dict_lines(lines, "种群帕累托代表", summary.get("pareto_representative"))
     _append_best_dict_lines(lines, "基因库最优虚拟个体", summary.get("best_virtual"))
     inds = summary.get("individuals", [])

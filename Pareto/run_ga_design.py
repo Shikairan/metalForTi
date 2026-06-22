@@ -36,6 +36,7 @@ from Pareto.ga_nsga2 import (
 )
 from Pareto.ga_compile import compile_genome
 from Pareto.ga_operators import GAConfig, crossover_and_mutate
+from Pareto.ga_testenv_lock import FixedTestenvContext, resolve_fixed_testenv
 from Pareto.ga_report import (
     OutputRestoreContext,
     build_archive_summary,
@@ -205,8 +206,39 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--element-thr", type=float, default=0.8)
     p.add_argument("--testenv-thr", type=float, default=0.8)
     p.add_argument("--coldway-thr", type=float, default=0.8)
+    p.add_argument(
+        "--fixed-tem",
+        type=float,
+        default=None,
+        help="固定试验温度 tem（data1123 量纲）；须与 --fixed-sr 同时提供",
+    )
+    p.add_argument(
+        "--fixed-sr",
+        type=float,
+        default=None,
+        help="固定应变速率 sr（data1123 量纲）；须与 --fixed-tem 同时提供",
+    )
     p.add_argument("--force-cpu", action="store_true")
     return p.parse_args()
+
+
+def _prepare_breeding_parents(
+    parents: List[Individual],
+    fixed_testenv: Optional[FixedTestenvContext],
+) -> List[Individual]:
+    """育种前覆盖父本 testenv（604 档案条目本身不改写）。"""
+    if fixed_testenv is None:
+        return parents
+    return [
+        Individual(
+            genome=fixed_testenv.apply(ind.genome),
+            fitness=ind.fitness,
+            objectives=ind.objectives,
+            rank=ind.rank,
+            crowding=ind.crowding,
+        )
+        for ind in parents
+    ]
 
 
 def _make_offspring(
@@ -217,8 +249,10 @@ def _make_offspring(
     projector,
     rng: torch.Generator,
     ga_cfg: GAConfig,
+    fixed_testenv: Optional[FixedTestenvContext] = None,
 ) -> List[torch.Tensor]:
     """NSGA-II 二元锦标赛选父，产出 pop_size 个子代基因组。"""
+    parents = _prepare_breeding_parents(parents, fixed_testenv)
     assign_rank_and_crowding(parents)
     children: List[torch.Tensor] = []
     while len(children) < pop_size:
@@ -315,10 +349,21 @@ def main() -> None:
     model, _ = load_dual_rgat(args.ckpt, args.rgat_dir, device)
     bounds = bounds_from_train_x(x, train_mask)
     projector = build_projector(x, bounds)
+    fixed_testenv = resolve_fixed_testenv(
+        args.fixed_tem,
+        args.fixed_sr,
+        te_mean,
+        te_std,
+        bounds,
+    )
     x_train = x[train_mask].clone()
     train_node_indices = torch.where(train_mask)[0]
 
-    ga_cfg = GAConfig(p_cross=args.p_cross, p_mut=args.p_mut)
+    ga_cfg = GAConfig(
+        p_cross=args.p_cross,
+        p_mut=args.p_mut,
+        fixed_testenv=fixed_testenv,
+    )
     use_anchor = args.objectives == "three"
     evaluator = FitnessEvaluator(
         model,
@@ -376,6 +421,7 @@ def main() -> None:
             projector,
             rng,
             ga_cfg,
+            fixed_testenv=fixed_testenv,
         )
         offspring = _evaluate_offspring(children_genomes, evaluator)
         fitness_list: List[FitnessResult] = [ind.fitness for ind in offspring if ind.fitness is not None]
@@ -434,6 +480,7 @@ def main() -> None:
         device=device,
         paths=paths,
         selection_method="NSGA-II",
+        fixed_testenv=fixed_testenv.to_summary_dict() if fixed_testenv else None,
     )
     write_pareto_json(args.out_dir / "pareto_front.json", summary)
     write_ga_summary_txt(args.out_dir / "ga_summary.txt", summary)

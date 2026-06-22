@@ -60,6 +60,16 @@ python -m Pareto.run_ga_design --target-ys 1201 --target-fs 0.2
 python -m Pareto.run_ga_design --target-ys 1201 --target-fs 0.2 --objectives two
 ```
 
+**固定试验环境**（可选；须同时提供，量纲与 data1123 一致）：
+
+```bash
+# 锁定 tem/sr，仅优化成分 + coldway（28 维）
+python -m Pareto.run_ga_design --target-ys 1014.8 --target-fs 0.147 \
+  --fixed-tem 25 --fixed-sr 0.001
+```
+
+省略 `--fixed-tem/--fixed-sr` 时，30 维全部参与遗传（默认）。
+
 CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 
 完整 150 代约 **604×150 = 90600** 次 GNN forward（仅子代）。
@@ -99,4 +109,5 @@ python -m Pareto.test_pareto_coldway_display
 python -m Pareto.test_pareto_label_means
 python -m Pareto.test_pareto_target_scale
 python -m Pareto.test_pareto_objective_shortfall
+python -m Pareto.test_pareto_fixed_testenv
 ```
