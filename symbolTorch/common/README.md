@@ -85,7 +85,8 @@ ys, fs = teacher_forward(teacher, x, edge_index, edge_type)
 | 函数 | 用在 | 通俗理解 |
 |------|------|----------|
 | `distill_block` | highExp、medExp 的神经网络层 | 给一层网络很多输入，看它输出什么，再搜公式模仿 |
-| `distill_block_on_numpy_io` | lowExp、sampleExp | 给任意「输入→输出」规则（含黑盒教师）搜公式 |
+| `distill_block_on_numpy_io` | lowExp、linResExp、sampleExp | 给任意「输入→输出」规则（含黑盒教师）搜公式 |
+| `fit_linear_basis` | linResExp | 30 维 Ridge 线性基底 |
 
 ### 保存了什么
 
@@ -114,6 +115,8 @@ QUICK_MAX_OUTPUT_DIM = 4
 | `HighExpHybrid` | highExp | 公式 encoder + 神经 RGAT/head |
 | `MedExpHybrid` | medExp | 公式 encoder + 神经 RGAT + 公式 head |
 | `TabularSymbolicModel` | lowExp | 公式 x→YS，公式 x→FS |
+| `TabularLinResModel` | linResExp | 30 维 Ridge 线性 + PySR 残差 |
+| `TabularLinearOnlyModel` | linResExp | 仅 Ridge 线性（对照） |
 
 **符号部分在 CPU 算**，结果再送回 GPU 给 RGAT 用（避免显卡报错）。初学者只需知道：**不影响你读 json 公式**。
 
@@ -139,7 +142,7 @@ FS 的「相对误差 %」在 sampleExp 选难例时会用到（`rel_pct_fs`）�
 - `--quick`、`--device`、`--seed`  
 - `--sr-niterations`、`--include-val`  
 
-所以四个教例**参数名字一样**，换目录跑即可。
+所以各教例**参数名字一样**，换目录跑即可。
 
 ---
 
@@ -158,4 +161,5 @@ FS 的「相对误差 %」在 sampleExp 选难例时会用到（`rel_pct_fs`）�
 
 - [总入门教程](../README.md)  
 - [lowExp 教例](../lowExp/README.md) — 建议第一个跑  
+- [linResExp](../linResExp/README.md) — 30 维线性 + PySR 残差  
 - [highExp](../highExp/README.md) / [medExp](../medExp/README.md) / [sampleExp](../sampleExp/README.md)

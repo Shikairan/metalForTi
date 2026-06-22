@@ -8,7 +8,7 @@ CKPT="${CKPT:-$ROOT/../modelAll/runs/best_rgat_full.pt}"
 EXTRA=("$@")
 
 echo "=== 清理旧结果 ==="
-for d in highExp medExp lowExp sampleExp; do
+for d in highExp medExp lowExp linResExp sampleExp; do
   if [[ -d "$ROOT/$d/runs" ]]; then
     find "$ROOT/$d/runs" -mindepth 1 ! -name '.gitkeep' -delete 2>/dev/null || true
   fi
@@ -35,6 +35,7 @@ echo "PY=$PY CKPT=$CKPT" | tee -a "$ROOT/runs_all.log"
 run_one highExp || true
 run_one medExp --encoder-sym-dir "$ROOT/highExp/runs" || true
 run_one lowExp || true
+run_one linResExp || true
 run_one sampleExp --top-k 1 || true
 
 echo "=== 生成汇总 $(date -u) ===" | tee -a "$ROOT/runs_all.log"
