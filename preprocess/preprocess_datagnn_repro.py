@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple
 
@@ -100,6 +101,87 @@ def label_means_from_arrays(ys, fs) -> Tuple[float, float]:
     y = np.asarray(ys, dtype=np.float64)
     f = np.asarray(fs, dtype=np.float64)
     return float(y.mean()), float(f.mean())
+
+
+def detect_fs_input_scale(fs_value: float, mode: str = "auto") -> str:
+    """
+    判断用户输入的 FS 量纲。
+    - data1123：小数（如 0.147、0.2）
+    - dataOri2：百分数刻度（如 14.7、20），数值通常 ≥ 1
+    """
+    if mode != "auto":
+        if mode not in ("data1123", "dataori2"):
+            raise ValueError(f"fs_input_scale must be auto|data1123|dataori2, got {mode!r}")
+        return mode
+    return "dataori2" if float(fs_value) >= 1.0 else "data1123"
+
+
+@dataclass(frozen=True)
+class ResolvedTargets:
+    """用户目标经预处理后的模型量纲与标准物理量（data1123）。"""
+
+    ys_physical: float
+    fs_data1123: float
+    ys_model: float
+    fs_model: float
+    ys_mean: float
+    fs_mean: float
+    fs_input_scale: str
+    fs_input_raw: float
+
+
+def resolve_user_targets(
+    target_ys: float,
+    target_fs: float,
+    ys_mean: float,
+    fs_mean: float,
+    *,
+    targets_physical: bool = True,
+    fs_input_scale: str = "auto",
+) -> ResolvedTargets:
+    """
+    原始输入 → 模型量纲（供 Pareto/GNN）+ 标准物理量（供日志/JSON 输出）。
+
+    YS 在 data1123 与 dataOri2 中刻度相同；FS 需区分小数与 ×100 刻度。
+    """
+    if not targets_physical:
+        ys_model, fs_model = float(target_ys), float(target_fs)
+        ys_phys, fs_d1123 = denormalize_targets_to_data1123(
+            ys_model, fs_model, ys_mean=ys_mean, fs_mean=fs_mean
+        )
+        return ResolvedTargets(
+            ys_physical=ys_phys,
+            fs_data1123=fs_d1123,
+            ys_model=ys_model,
+            fs_model=fs_model,
+            ys_mean=ys_mean,
+            fs_mean=fs_mean,
+            fs_input_scale="model",
+            fs_input_raw=float(target_fs),
+        )
+
+    ys_phys = float(target_ys)
+    fs_raw = float(target_fs)
+    scale = detect_fs_input_scale(fs_raw, fs_input_scale)
+    ys_model = ys_phys / (float(ys_mean) + EPS)
+    if scale == "dataori2":
+        fs_d1123 = fs_dataori2_to_data1123(fs_raw)
+        fs_model = fs_raw / (float(fs_mean) + EPS)
+    else:
+        fs_d1123 = fs_raw
+        _, fs_model = normalize_targets_from_data1123(
+            ys_phys, fs_d1123, ys_mean=ys_mean, fs_mean=fs_mean
+        )
+    return ResolvedTargets(
+        ys_physical=ys_phys,
+        fs_data1123=fs_d1123,
+        ys_model=ys_model,
+        fs_model=fs_model,
+        ys_mean=ys_mean,
+        fs_mean=fs_mean,
+        fs_input_scale=scale,
+        fs_input_raw=fs_raw,
+    )
 
 
 def load_testenv_stats_np(stats_path: Path) -> Tuple[np.ndarray, np.ndarray]:

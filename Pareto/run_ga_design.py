@@ -16,10 +16,9 @@ from typing import List, Optional
 import torch
 
 from preprocess.preprocess_datagnn_repro import (
-    denormalize_targets_to_data1123,
     label_means_from_arrays,
     load_testenv_stats_np,
-    normalize_targets_from_data1123,
+    resolve_user_targets,
 )
 from grd.feature_layout import bounds_from_train_x, build_projector
 from grd.io_utils import load_dual_rgat, load_graph_bundle, merge_hetero_edges
@@ -130,23 +129,27 @@ def _resolve_targets(
     fs: torch.Tensor,
     *,
     targets_physical: bool,
-) -> tuple[float, float, float, float, float, float]:
-    """
-    返回 (target_ys_model, target_fs_model, target_ys_input, target_fs_input, ys_mean, fs_mean)。
-    targets_physical=True 时，输入与 data1123.csv 同量纲（FS 为小数，如 0.147）。
-    """
+    fs_input_scale: str,
+):
+    """原始目标 → 模型量纲 + data1123 标准物理量。"""
     ys_mean, fs_mean = label_means_from_arrays(ys.cpu().numpy(), fs.cpu().numpy())
-    if targets_physical:
-        ys_in, fs_in = float(target_ys), float(target_fs)
-        ys_model, fs_model = normalize_targets_from_data1123(
-            ys_in, fs_in, ys_mean=ys_mean, fs_mean=fs_mean
-        )
-        return ys_model, fs_model, ys_in, fs_in, ys_mean, fs_mean
-    ys_model, fs_model = float(target_ys), float(target_fs)
-    ys_in, fs_in = denormalize_targets_to_data1123(
-        ys_model, fs_model, ys_mean=ys_mean, fs_mean=fs_mean
+    resolved = resolve_user_targets(
+        target_ys,
+        target_fs,
+        ys_mean,
+        fs_mean,
+        targets_physical=targets_physical,
+        fs_input_scale=fs_input_scale,
     )
-    return ys_model, fs_model, ys_in, fs_in, ys_mean, fs_mean
+    return (
+        resolved.ys_model,
+        resolved.fs_model,
+        resolved.ys_physical,
+        resolved.fs_data1123,
+        resolved.ys_mean,
+        resolved.fs_mean,
+        resolved,
+    )
 
 
 def _resolve_testenv_stats_path(data_dir: Path, root: Path) -> Path:
@@ -172,6 +175,12 @@ def _parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="target-ys/fs 为 data1123 原始量纲，自动换算为模型量纲（默认开启；--no-targets-physical 表示已是 ys.pt/fs.pt 量纲）",
+    )
+    p.add_argument(
+        "--fs-input-scale",
+        choices=("auto", "data1123", "dataori2"),
+        default="auto",
+        help="FS 输入量纲：auto 时 ≥1 视为 dataOri2（如 20），<1 视为 data1123（如 0.2）",
     )
     p.add_argument("--data-dir", type=Path, default=root / "gnnDir" / "gnndataPT" / "r-gatPT")
     p.add_argument(
@@ -253,12 +262,21 @@ def main() -> None:
     root = Path(__file__).resolve().parents[1]
     x, ys, fs, train_mask, _ = load_graph_bundle(args.data_dir)
     targets_physical = args.targets_physical
-    target_ys, target_fs, target_ys_phys, target_fs_phys, ys_mean, fs_mean = _resolve_targets(
+    (
+        target_ys,
+        target_fs,
+        target_ys_phys,
+        target_fs_phys,
+        ys_mean,
+        fs_mean,
+        resolved_targets,
+    ) = _resolve_targets(
         args.target_ys,
         args.target_fs,
         ys,
         fs,
         targets_physical=targets_physical,
+        fs_input_scale=args.fs_input_scale,
     )
     te_mean, te_std = load_testenv_stats_np(_resolve_testenv_stats_path(args.data_dir, root))
     restore = OutputRestoreContext(
@@ -270,8 +288,14 @@ def main() -> None:
         target_fs_physical=target_fs_phys,
     )
     if targets_physical:
+        if resolved_targets.fs_input_scale == "dataori2" and resolved_targets.fs_input_raw >= 1.0:
+            logger.info(
+                "FS 输入 %.4f 识别为 dataOri2 量纲 → 标准输出 FS=%.6f（data1123）",
+                resolved_targets.fs_input_raw,
+                target_fs_phys,
+            )
         logger.info(
-            "目标（data1123）YS=%.4f FS=%.6f → 模型量纲 YS=%.6f FS=%.6f "
+            "目标（标准 data1123）YS=%.4f FS=%.6f → 模型量纲 YS=%.6f FS=%.6f "
             "(全表均值 YS=%.4f FS_dataOri2=%.4f)",
             target_ys_phys,
             target_fs_phys,

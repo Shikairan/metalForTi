@@ -10,6 +10,7 @@ from preprocess.preprocess_datagnn_repro import (
     denormalize_genome_to_data1123,
     denormalize_targets_model,
     denormalize_targets_to_data1123,
+    detect_fs_input_scale,
     fs_data1123_to_dataori2,
     fs_dataori2_to_data1123,
     inverse_coldway_flat_18,
@@ -18,6 +19,8 @@ from preprocess.preprocess_datagnn_repro import (
     load_testenv_stats_np,
     normalize_targets_from_data1123,
     normalize_targets_physical,
+    resolve_user_targets,
+    ResolvedTargets,
 )
 
 __all__ = [
@@ -30,6 +33,7 @@ __all__ = [
     "denormalize_genome_to_data1123",
     "denormalize_targets_model",
     "denormalize_targets_to_data1123",
+    "detect_fs_input_scale",
     "fs_data1123_to_dataori2",
     "fs_dataori2_to_data1123",
     "inverse_coldway_flat_18",
@@ -38,4 +42,6 @@ __all__ = [
     "load_testenv_stats_np",
     "normalize_targets_from_data1123",
     "normalize_targets_physical",
+    "resolve_user_targets",
+    "ResolvedTargets",
 ]

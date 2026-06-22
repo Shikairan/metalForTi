@@ -22,10 +22,24 @@ python -m Pareto.run_ga_design --target-ys 1014.8 --target-fs 0.147
 python -m Pareto.run_ga_design --target-ys 1.05 --target-fs 0.52 --no-targets-physical
 ```
 
-**量纲说明**：
+**量纲说明**（输入原始 → 内部预处理 → 输出逆变换）：
 
-- `--target-ys`：与 `data1123.csv` 相同（MPa）
-- `--target-fs`：与 `data1123.csv` 相同（小数，如 `0.147`）；内部先 `×100` 变为 dataOri2 刻度，再除以全表 FS 均值得到模型量纲
+1. **CLI 输入**：原始物理量（与训练表一致）
+   - `--target-ys`：MPa（data1123 / dataOri2 相同）
+   - `--target-fs`：默认 `auto` 识别量纲
+     - 小数如 `0.147`、`0.2` → **data1123**
+     - ≥1 如 `14.7`、`20` → **dataOri2**（自动 ÷100 为标准输出）
+2. **内部 Pareto**：自动换算为 `ys.pt` / `fs.pt` 模型量纲后优化
+3. **日志 / JSON 输出**：逆变换为标准 **data1123** 物理量（YS MPa，FS 小数）
+
+```bash
+# data1123 量纲
+python -m Pareto.run_ga_design --target-ys 1201 --target-fs 0.2
+
+# dataOri2 量纲（FS=20 与上式等价，自动识别）
+python -m Pareto.run_ga_design --target-ys 1201 --target-fs 20
+```
+
 - 公式见 [`preprocess/PREPROCESS_datagnn.md`](../preprocess/PREPROCESS_datagnn.md)
 
 ## 默认参数
@@ -68,4 +82,5 @@ python -m Pareto.ga_archive
 python -m Pareto.test_archive_smoke
 python -m Pareto.test_pareto_output_restore
 python -m Pareto.test_pareto_coldway_display
+python -m Pareto.test_pareto_target_scale
 ```

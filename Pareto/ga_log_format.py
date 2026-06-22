@@ -109,23 +109,23 @@ def _format_one_solution(
     elem_sum = float(g_disp[ELEMENT_SLICE].sum().item())
     pred_label = "标签 YS/FS（未 GNN forward）" if ys_fs_from_labels else "预测"
 
-    if restore is not None:
-        ys_pred, fs_pred = denormalize_targets_to_data1123(
-            fitness.ys_pred,
-            fitness.fs_pred,
-            ys_mean=restore.ys_mean,
-            fs_mean=restore.fs_mean,
+    if restore is None:
+        raise ValueError(
+            "日志输出需要 OutputRestoreContext：目标/预测必须在同一物理量纲下展示，"
+            "请传入 restore（原始输入经预处理后，展示时做逆变换）"
         )
-        f1 = abs(ys_pred - restore.target_ys_physical)
-        f2 = abs(fs_pred - restore.target_fs_physical)
-        tgt_ys = restore.target_ys_physical
-        tgt_fs = restore.target_fs_physical
-        unit_note = "data1123"
-    else:
-        ys_pred, fs_pred = fitness.ys_pred, fitness.fs_pred
-        f1, f2 = fitness.f1, fitness.f2
-        tgt_ys, tgt_fs = target_ys, target_fs
-        unit_note = "模型量纲"
+
+    ys_pred, fs_pred = denormalize_targets_to_data1123(
+        fitness.ys_pred,
+        fitness.fs_pred,
+        ys_mean=restore.ys_mean,
+        fs_mean=restore.fs_mean,
+    )
+    f1 = abs(ys_pred - restore.target_ys_physical)
+    f2 = abs(fs_pred - restore.target_fs_physical)
+    tgt_ys = restore.target_ys_physical
+    tgt_fs = restore.target_fs_physical
+    unit_note = "标准 data1123"
 
     lines = [f"  【{section_title}】"]
     if same_as_note:
@@ -148,8 +148,8 @@ def _format_one_solution(
     lines.extend([hdr, val, f"      (10元合计 {_fmt(elem_sum)} wt%)", ""])
 
     te = g_disp[TESTENV_SLICE]
-    env_title = "试验环境（tem, sr）" if restore is not None else "试验环境 z-score"
-    te_label = ("tem", "sr") if restore is not None else ("tem", "fcr")
+    env_title = "试验环境（tem, sr）"
+    te_label = ("tem", "sr")
     lines.extend([
         f"    【{env_title}】",
         f"      {te_label[0]} = {_fmt(float(te[0].item())):>10}    {te_label[1]} = {_fmt(float(te[1].item())):>10}",
