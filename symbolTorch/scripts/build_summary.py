@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""汇总四档 symbolTorch 实验结果 → SYMBOLTORCH_SUMMARY.{json,md}"""
+"""汇总五档 symbolTorch 实验结果 → SYMBOLTORCH_SUMMARY.{json,md}"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPS = ("highExp", "medExp", "lowExp", "sampleExp")
+EXPS = ("highExp", "medExp", "lowExp", "linResExp", "sampleExp")
 
 
 def _read_json(path: Path) -> Optional[Dict[str, Any]]:
@@ -22,6 +22,19 @@ def _read_text(path: Path) -> str:
     if not path.is_file():
         return ""
     return path.read_text(encoding="utf-8").strip()
+
+
+def _pick_linres_equations(sym_json: Optional[Dict[str, Any]]) -> List[str]:
+    if not sym_json:
+        return []
+    eqs = sym_json.get("equations", {})
+    out: List[str] = []
+    for key in ("linear", "residual"):
+        v = eqs.get(key)
+        if v is None or str(v).strip() in ("", "None"):
+            continue
+        out.append(f"[{key}] {v}")
+    return out
 
 
 def _pick_equations(sym_json: Optional[Dict[str, Any]], max_n: int = 3) -> List[str]:
@@ -54,13 +67,18 @@ def _collect_exp(name: str) -> Dict[str, Any]:
         "highExp": ["ys_encoder_sym.json", "fs_encoder_sym.json"],
         "medExp": ["ys_encoder_sym.json", "fs_encoder_sym.json", "ys_head_sym.json", "fs_head_sym.json"],
         "lowExp": ["ys_tabular_sym.json", "fs_tabular_sym.json"],
+        "linResExp": ["ys_linres.json", "fs_linres.json"],
         "sampleExp": [],
     }
     for fname in patterns.get(name, []):
         p = runs / fname
         if p.is_file():
             block["artifacts"].append(str(p))
-            block["equations_preview"][fname] = _pick_equations(_read_json(p))
+            data = _read_json(p)
+            if name == "linResExp":
+                block["equations_preview"][fname] = _pick_linres_equations(data)
+            else:
+                block["equations_preview"][fname] = _pick_equations(data)
 
     if name == "sampleExp":
         nodes = sorted(runs.glob("node_*/ys_formula.json"))
@@ -82,7 +100,7 @@ def _format_metrics_table(metrics: Optional[Dict[str, Any]]) -> List[str]:
     if not metrics:
         return ["  （无 metrics.json）"]
     lines: List[str] = []
-    for key in ("teacher", "hybrid", "tabular_symbolic"):
+    for key in ("teacher", "hybrid", "linear_only", "tabular_linres", "tabular_symbolic"):
         if key not in metrics:
             continue
         m = metrics[key]

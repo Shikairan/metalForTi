@@ -127,3 +127,32 @@ class TabularSymbolicModel(nn.Module):
         ys = _sym_forward(self.sym_ys, x).reshape(-1)
         fs = _sym_forward(self.sym_fs, x).reshape(-1)
         return ys, fs
+
+
+class TabularLinResModel(nn.Module):
+    """30-dim Ridge linear basis + PySR residual (no graph at inference)."""
+
+    def __init__(self, basis_ys, basis_fs, sym_res_ys, sym_res_fs) -> None:
+        super().__init__()
+        self.basis_ys = basis_ys
+        self.basis_fs = basis_fs
+        self.sym_res_ys = sym_res_ys
+        self.sym_res_fs = sym_res_fs
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        ys = self.basis_ys.predict_torch(x.float()) + _sym_forward(self.sym_res_ys, x).reshape(-1)
+        fs = self.basis_fs.predict_torch(x.float()) + _sym_forward(self.sym_res_fs, x).reshape(-1)
+        return ys, fs
+
+
+class TabularLinearOnlyModel(nn.Module):
+    """Ridge linear basis only (no residual symbolic term)."""
+
+    def __init__(self, basis_ys, basis_fs) -> None:
+        super().__init__()
+        self.basis_ys = basis_ys
+        self.basis_fs = basis_fs
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        x = x.float()
+        return self.basis_ys.predict_torch(x), self.basis_fs.predict_torch(x)
