@@ -44,7 +44,21 @@ python -m Pareto.run_ga_design --target-ys 1201 --target-fs 0.2
 |------|------|
 | `--pop-size` | `604`（种群 / 每代子代数） |
 | `--generations` | `150` |
-| `--objectives` | `three`（f1=\|ΔYS\|, f2=\|ΔFS\|, f3=锚定 L2） |
+| `--objectives` | `three`（默认，f1+f2+f3 三目标）/ `two`（仅 f1+f2，关闭 f3） |
+
+**三目标说明**：
+- **f1** = |ΔYS|（模型量纲）
+- **f2** = |ΔFS|（模型量纲）
+- **f3** = 与训练集最近邻的 **L2 距离**（锚定项，越小越接近已知配方）
+- 原始 604 图节点自身就是训练样本，**f3 常为 0.0000**（不是未开启）；虚拟子代通常 f3 > 0
+
+```bash
+# 默认三目标（含 f3）
+python -m Pareto.run_ga_design --target-ys 1201 --target-fs 0.2
+
+# 仅 YS/FS 两目标，关闭 f3
+python -m Pareto.run_ga_design --target-ys 1201 --target-fs 0.2 --objectives two
+```
 
 CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 
