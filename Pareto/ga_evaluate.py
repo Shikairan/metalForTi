@@ -15,12 +15,15 @@ from Pareto.ga_graph import GraphContext, build_augmented_graph
 
 @dataclass
 class FitnessResult:
-    f1: float  # |dYS|
-    f2: float  # |dFS|
+    f1: float  # max(0, target_YS - pred) 欠达标惩罚
+    f2: float  # max(0, target_FS - pred) 欠达标惩罚
     f3: float  # anchor L2 (0 if two-objective)
     ys_pred: float
     fs_pred: float
     nearest_train_idx: int
+
+
+from Pareto.ga_objectives import target_shortfall
 
 
 class FitnessEvaluator:
@@ -86,8 +89,8 @@ class FitnessEvaluator:
         ys_pred, fs_pred = self.model(x_aug, ei, et)
         yp = float(ys_pred[d_idx].item())
         fp = float(fs_pred[d_idx].item())
-        f1 = abs(yp - self.target_ys)
-        f2 = abs(fp - self.target_fs)
+        f1 = target_shortfall(yp, self.target_ys)
+        f2 = target_shortfall(fp, self.target_fs)
         if self.use_anchor:
             f3, nn_idx = self._anchor_distance(genome)
         else:
@@ -121,8 +124,8 @@ class FitnessEvaluator:
         """用节点标签 YS/FS 计算适应度，不调用 GNN forward。"""
         yp = float(ys_label)
         fp = float(fs_label)
-        f1 = abs(yp - self.target_ys)
-        f2 = abs(fp - self.target_fs)
+        f1 = target_shortfall(yp, self.target_ys)
+        f2 = target_shortfall(fp, self.target_fs)
         if self.use_anchor:
             f3, nn_idx = self._anchor_distance(genome)
         else:
