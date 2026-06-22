@@ -15,10 +15,10 @@ from grd.feature_layout import (
     ELEMENT_DIM,
     ELEMENT_SLICE,
     INPUT_DIM,
-    TESTENV_DIM,
     TESTENV_SLICE,
 )
 from Pareto.ga_compile import compile_genome
+from Pareto.ga_testenv_lock import FixedTestenvContext
 from grd.feature_layout import FeatureBounds
 from grd.masked_projector import MaskedCompositeProjector
 
@@ -35,6 +35,7 @@ class GAConfig:
     p_mut_activate: float = 0.2
     mutate_by_stage: bool = True
     delta_frac: float = 0.1
+    fixed_testenv: Optional[FixedTestenvContext] = None
 
 
 def _uniform_crossover_slice(
@@ -52,6 +53,8 @@ def segmented_crossover(
     parent1: torch.Tensor,
     parent2: torch.Tensor,
     rng: torch.Generator,
+    *,
+    lock_testenv: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """element / testenv / coldway 各段内交叉；coldway 按阶段行块。"""
     c1, c2 = parent1.clone(), parent2.clone()
@@ -61,10 +64,11 @@ def segmented_crossover(
     )
     c1[ELEMENT_SLICE], c2[ELEMENT_SLICE] = e1, e2
 
-    t1, t2 = _uniform_crossover_slice(
-        parent1[TESTENV_SLICE], parent2[TESTENV_SLICE], rng
-    )
-    c1[TESTENV_SLICE], c2[TESTENV_SLICE] = t1, t2
+    if not lock_testenv:
+        t1, t2 = _uniform_crossover_slice(
+            parent1[TESTENV_SLICE], parent2[TESTENV_SLICE], rng
+        )
+        c1[TESTENV_SLICE], c2[TESTENV_SLICE] = t1, t2
 
     for stage in range(_COLDWAY_STAGES):
         sl = slice(COLDWAY_SLICE.start + stage * _ROW_DIM, COLDWAY_SLICE.start + (stage + 1) * _ROW_DIM)
@@ -120,11 +124,13 @@ def mutate_genome(
     if cfg.mutate_by_stage and torch.rand(1, generator=rng).item() < 0.5:
         stage = int(torch.randint(0, _COLDWAY_STAGES, (1,), generator=rng).item())
         base = COLDWAY_SLICE.start + stage * _ROW_DIM
-        candidate_dims = list(range(ELEMENT_DIM + TESTENV_DIM)) + list(
-            range(base, base + _ROW_DIM)
-        )
+        candidate_dims = list(range(ELEMENT_DIM)) + list(range(base, base + _ROW_DIM))
     else:
         candidate_dims = list(range(INPUT_DIM))
+
+    if cfg.fixed_testenv is not None:
+        locked = set(range(TESTENV_SLICE.start, TESTENV_SLICE.stop))
+        candidate_dims = [i for i in candidate_dims if i not in locked]
 
     for i in candidate_dims:
         if torch.rand(1, generator=rng).item() < cfg.p_mut:
@@ -148,9 +154,13 @@ def init_population(
         j = int(torch.randint(0, n_train, (1,), generator=rng).item())
         g = train_bank[j].clone()
         g = g + torch.randn(INPUT_DIM, generator=rng) * 0.05
-        g = compile_genome(g, bounds, projector, train_bank, rng=rng)
+        g = compile_genome(
+            g, bounds, projector, train_bank, rng=rng, fixed_testenv=cfg.fixed_testenv
+        )
         g = mutate_genome(g, train_bank, rng, cfg)
-        g = compile_genome(g, bounds, projector, train_bank, rng=rng)
+        g = compile_genome(
+            g, bounds, projector, train_bank, rng=rng, fixed_testenv=cfg.fixed_testenv
+        )
         pop.append(g)
     return pop
 
@@ -164,14 +174,19 @@ def crossover_and_mutate(
     rng: torch.Generator,
     cfg: GAConfig,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    lock_testenv = cfg.fixed_testenv is not None
     if torch.rand(1, generator=rng).item() < cfg.p_cross:
-        c1, c2 = segmented_crossover(parent1, parent2, rng)
+        c1, c2 = segmented_crossover(parent1, parent2, rng, lock_testenv=lock_testenv)
     else:
         c1, c2 = parent1.clone(), parent2.clone()
     c1 = mutate_genome(c1, train_bank, rng, cfg)
     c2 = mutate_genome(c2, train_bank, rng, cfg)
-    c1 = compile_genome(c1, bounds, projector, train_bank, rng=rng)
-    c2 = compile_genome(c2, bounds, projector, train_bank, rng=rng)
+    c1 = compile_genome(
+        c1, bounds, projector, train_bank, rng=rng, fixed_testenv=cfg.fixed_testenv
+    )
+    c2 = compile_genome(
+        c2, bounds, projector, train_bank, rng=rng, fixed_testenv=cfg.fixed_testenv
+    )
     return c1, c2
 
 

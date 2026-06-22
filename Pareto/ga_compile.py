@@ -4,7 +4,10 @@ ga_compile.py — 基因组编译：element / testenv / coldway(3×3×2) 约束�
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from Pareto.ga_testenv_lock import FixedTestenvContext
 
 import torch
 
@@ -153,6 +156,7 @@ def compile_genome(
     *,
     total_wt: float = DEFAULT_TOTAL_WT,
     rng: Optional[torch.Generator] = None,
+    fixed_testenv: Optional[FixedTestenvContext] = None,
 ) -> torch.Tensor:
     """
     编译单个个体的 30 维基因组。
@@ -173,13 +177,18 @@ def compile_genome(
         train_cw = train_bank[:, COLDWAY_SLICE]
 
     g[ELEMENT_SLICE] = compile_element(g[ELEMENT_SLICE], total_wt=total_wt)
-    g[TESTENV_SLICE] = compile_testenv(g[TESTENV_SLICE], bounds)
+    if fixed_testenv is not None:
+        fixed_testenv.apply_inplace(g)
+    else:
+        g[TESTENV_SLICE] = compile_testenv(g[TESTENV_SLICE], bounds)
     g[COLDWAY_SLICE] = compile_coldway(g[COLDWAY_SLICE], bounds, train_cw, rng=rng)
 
     row = g.unsqueeze(0)
     row = projector.project(row)
     g = row.squeeze(0)
     g[COLDWAY_SLICE] = compile_coldway(g[COLDWAY_SLICE], bounds, train_cw, rng=rng)
+    if fixed_testenv is not None:
+        fixed_testenv.apply_inplace(g)
     return g
 
 
