@@ -42,9 +42,20 @@ CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 
 ## 输出
 
-- `Pareto/outputs_ga/pareto_front.json` — 最终种群第一非支配层
-- `Pareto/outputs_ga/ga_summary.txt`
-- `Pareto/outputs_ga/pareto_scatter.png`
+- `Pareto/outputs_ga/pareto_front.json` — 最终种群第一非支配层（**数值已还原为 data1123 物理量纲**）
+- `Pareto/outputs_ga/ga_summary.txt` — 文本摘要（同上）
+- `Pareto/outputs_ga/pareto_scatter.png` — f1/f2 散点（物理量纲误差）
+
+### 输出字段（物理量纲，30 维结构不变）
+
+| 字段 | 含义 |
+|------|------|
+| `genome_30d` | 30 维基因组：元素 10 + 测试条件 2 + 热处理 18，**仅数值还原** |
+| `testenv.tem` / `testenv.sr` | 测试温度（℃）、应变速率（与 data1123 的 `sr` 一致） |
+| `ys_pred` / `fs_pred` | GNN 预测 YS/FS（**data1123 量纲**） |
+| `f1_ys_abs_err` / `f2_fs_abs_err` | 物理量纲下的 \|预测 − 目标\| |
+
+内部 NSGA-II 仍在模型归一化空间优化；归档 JSON/TXT 做逆变换。
 
 每代日志展示：**当前种群帕累托代表** + **前沿个体数**。
 
@@ -53,4 +64,5 @@ CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 ```bash
 python -m Pareto.ga_archive
 python -m Pareto.test_archive_smoke
+python -m Pareto.test_pareto_output_restore
 ```

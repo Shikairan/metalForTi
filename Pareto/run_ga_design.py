@@ -18,6 +18,7 @@ import torch
 from preprocess.preprocess_datagnn_repro import (
     denormalize_targets_to_data1123,
     label_means_from_arrays,
+    load_testenv_stats_np,
     normalize_targets_from_data1123,
 )
 from grd.feature_layout import bounds_from_train_x, build_projector
@@ -37,6 +38,7 @@ from Pareto.ga_nsga2 import (
 from Pareto.ga_compile import compile_genome
 from Pareto.ga_operators import GAConfig, crossover_and_mutate
 from Pareto.ga_report import (
+    OutputRestoreContext,
     build_archive_summary,
     write_ga_summary_txt,
     write_pareto_json,
@@ -143,6 +145,19 @@ def _resolve_targets(
         ys_model, fs_model, ys_mean=ys_mean, fs_mean=fs_mean
     )
     return ys_model, fs_model, ys_in, fs_in, ys_mean, fs_mean
+
+
+def _resolve_testenv_stats_path(data_dir: Path, root: Path) -> Path:
+    for p in (
+        data_dir.parent.parent / "datacsv" / "testenv_stats.csv",
+        root / "gnnDir" / "datacsv" / "testenv_stats.csv",
+    ):
+        if p.is_file():
+            return p
+    raise FileNotFoundError(
+        f"testenv_stats.csv not found near {data_dir}. "
+        "Run gnnDir/build_datagnn.py first."
+    )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -369,6 +384,15 @@ def main() -> None:
         "summary_txt": str((args.out_dir / "ga_summary.txt").resolve()),
         "scatter_png": str((args.out_dir / "pareto_scatter.png").resolve()),
     }
+    te_mean, te_std = load_testenv_stats_np(_resolve_testenv_stats_path(args.data_dir, root))
+    restore = OutputRestoreContext(
+        ys_mean=ys_mean,
+        fs_mean=fs_mean,
+        te_mean=te_mean,
+        te_std=te_std,
+        target_ys_physical=target_ys_phys,
+        target_fs_physical=target_fs_phys,
+    )
     summary = build_archive_summary(
         archive,
         front,
@@ -378,6 +402,7 @@ def main() -> None:
         target_fs_physical=target_fs_phys,
         targets_physical=targets_physical,
         label_means={"ys": ys_mean, "fs": fs_mean},
+        restore=restore,
         objectives=args.objectives,
         offspring_per_generation=args.pop_size,
         generations=args.generations,
