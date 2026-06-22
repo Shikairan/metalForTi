@@ -25,6 +25,43 @@ DEFAULT_YS_MEAN = 965.7821034430465
 DEFAULT_FS_MEAN = 28.120464644701983
 
 
+def normalize_targets_physical(
+    ys_physical: float,
+    fs_physical: float,
+    *,
+    ys_mean: float = DEFAULT_YS_MEAN,
+    fs_mean: float = DEFAULT_FS_MEAN,
+    eps: float = EPS,
+) -> Tuple[float, float]:
+    """物理量 YS/FS → 与 ys.pt / fs.pt 同量纲（列均值归一化）。"""
+    return (
+        float(ys_physical) / (float(ys_mean) + eps),
+        float(fs_physical) / (float(fs_mean) + eps),
+    )
+
+
+def denormalize_targets_model(
+    ys_model: float,
+    fs_model: float,
+    *,
+    ys_mean: float = DEFAULT_YS_MEAN,
+    fs_mean: float = DEFAULT_FS_MEAN,
+    eps: float = EPS,
+) -> Tuple[float, float]:
+    """模型量纲 YS/FS → 物理量（逆变换）。"""
+    return (
+        float(ys_model) * (float(ys_mean) + eps),
+        float(fs_model) * (float(fs_mean) + eps),
+    )
+
+
+def label_means_from_arrays(ys, fs) -> Tuple[float, float]:
+    """与 forward_preprocess(normalize_targets=True) 一致：全表标签算术均值。"""
+    y = np.asarray(ys, dtype=np.float64)
+    f = np.asarray(fs, dtype=np.float64)
+    return float(y.mean()), float(f.mean())
+
+
 def normalize_coldway_tx_cx(raw: np.ndarray) -> np.ndarray:
     x = np.asarray(raw, dtype=np.float32)
     single = x.ndim == 1
