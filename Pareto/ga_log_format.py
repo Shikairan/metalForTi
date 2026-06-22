@@ -17,6 +17,7 @@ from grd.feature_layout import (
     compute_ti_balance,
 )
 from Pareto.coldway_display import format_coldway_lines
+from Pareto.ga_objectives import target_shortfall
 from Pareto.ga_evaluate import FitnessResult
 from Pareto.ga_report import OutputRestoreContext
 from preprocess.preprocess_datagnn_repro import (
@@ -128,8 +129,8 @@ def _format_one_solution(
         ys_mean=restore.ys_mean,
         fs_mean=restore.fs_mean,
     )
-    f1_phys = abs(ys_pred - restore.target_ys_physical)
-    f2_phys = abs(fs_pred - restore.target_fs_physical)
+    f1_phys = target_shortfall(ys_pred, restore.target_ys_physical)
+    f2_phys = target_shortfall(fs_pred, restore.target_fs_physical)
     tgt_ys = restore.target_ys_physical
     tgt_fs = restore.target_fs_physical
     unit_note = "data1123"
@@ -143,7 +144,7 @@ def _format_one_solution(
         f"    【目标与预测（{unit_note}，仅展示）】",
         f"      目标    YS = {_fmt(tgt_ys):>10}    FS = {_fmt(tgt_fs):>10}",
         f"      {pred_label:<6}  YS = {_fmt(ys_pred):>10}    FS = {_fmt(fs_pred):>10}",
-        f"      误差（展示） |ΔYS| = {_fmt(f1_phys):>8}    |ΔFS| = {_fmt(f2_phys):>8}",
+        f"      欠达标（展示） YS = {_fmt(f1_phys):>8}    FS = {_fmt(f2_phys):>8}",
         f"      误差（NSGA-II 优化，模型量纲） f1={_fmt_objective(fitness.f1):>8}  f2={_fmt_objective(fitness.f2):>8}  f3={_fmt_objective(fitness.f3):>8}",
         "",
         "    【合金成分 wt%】",

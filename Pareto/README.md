@@ -46,9 +46,9 @@ python -m Pareto.run_ga_design --target-ys 1201 --target-fs 0.2
 | `--generations` | `150` |
 | `--objectives` | `three`（默认，f1+f2+f3 三目标）/ `two`（仅 f1+f2，关闭 f3） |
 
-**三目标说明**：
-- **f1** = |ΔYS|（模型量纲）
-- **f2** = |ΔFS|（模型量纲）
+**三目标说明**（方案 A：单边欠达标，达标或超额不罚）：
+- **f1** = max(0, 目标 YS − 预测 YS)（模型量纲）
+- **f2** = max(0, 目标 FS − 预测 FS)（模型量纲）
 - **f3** = 与训练集最近邻的 **L2 距离**（锚定项，越小越接近已知配方）
 - 原始 604 图节点自身就是训练样本，**f3 常为 0.0000**（不是未开启）；虚拟子代通常 f3 > 0
 
@@ -68,7 +68,7 @@ CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 
 - `Pareto/outputs_ga/pareto_front.json` — 最终种群第一非支配层（**数值已还原为 data1123 物理量纲**）
 - `Pareto/outputs_ga/ga_summary.txt` — 文本摘要（同上）
-- `Pareto/outputs_ga/pareto_scatter.png` — f1/f2 散点（物理量纲误差）
+- `Pareto/outputs_ga/pareto_scatter.png` — f1/f2 散点（物理量纲欠达标）
 
 ### 输出字段（物理量纲，30 维结构不变）
 
@@ -77,12 +77,12 @@ CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 | `genome_30d` | 30 维基因组：元素 10 + 测试条件 2 + 热处理 18，**仅数值还原** |
 | `testenv.tem` / `testenv.sr` | 测试温度（℃）、应变速率（与 data1123 的 `sr` 一致） |
 | `ys_pred` / `fs_pred` | GNN 预测 YS/FS（**data1123 量纲**） |
-| `f1_ys_abs_err` / `f2_fs_abs_err` | 物理量纲下的 \|预测 − 目标\| |
+| `f1_ys_shortfall` / `f2_fs_shortfall` | 物理量纲下的欠达标量 max(0, 目标 − 预测) |
 
 内部 NSGA-II 仍在**模型量纲**（`ys.pt`/`fs.pt` 刻度）下以 f1/f2/f3 优化；日志与 JSON 中的 data1123 数值及「展示误差」仅便于阅读，**不参与**非支配排序与环境选择。
 
 每代日志会同时打印：
-- **误差（展示）**：物理量纲下的 |ΔYS|/|ΔFS|
+- **欠达标（展示）**：物理量纲下的 max(0, 目标 − 预测)
 - **f1/f2/f3（NSGA-II 优化）**：模型量纲，与实际帕累托排序一致
 
 每代日志中 coldway 各阶段**统一显示物理量 `T`、`t`**（不再对方式 2/3 误标为 C_a/C_b），数值固定 4 位小数。
@@ -98,4 +98,5 @@ python -m Pareto.test_pareto_output_restore
 python -m Pareto.test_pareto_coldway_display
 python -m Pareto.test_pareto_label_means
 python -m Pareto.test_pareto_target_scale
+python -m Pareto.test_pareto_objective_shortfall
 ```
