@@ -79,6 +79,7 @@ def _log_generation(
     *,
     target_ys: float,
     target_fs: float,
+    restore: OutputRestoreContext | None = None,
     ys_fs_from_labels: bool = False,
     new_virtual_count: int = 0,
 ) -> None:
@@ -108,6 +109,7 @@ def _log_generation(
         gene_source=gene_source,
         virtual_genome=None,
         virtual_fitness=None,
+        restore=restore,
     )
     logger.info("%s", block)
 
@@ -248,6 +250,7 @@ def main() -> None:
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("使用设备: %s | 算法: NSGA-II（非支配排序 + 拥挤距离）", device)
+    root = Path(__file__).resolve().parents[1]
     x, ys, fs, train_mask, _ = load_graph_bundle(args.data_dir)
     targets_physical = args.targets_physical
     target_ys, target_fs, target_ys_phys, target_fs_phys, ys_mean, fs_mean = _resolve_targets(
@@ -256,6 +259,15 @@ def main() -> None:
         ys,
         fs,
         targets_physical=targets_physical,
+    )
+    te_mean, te_std = load_testenv_stats_np(_resolve_testenv_stats_path(args.data_dir, root))
+    restore = OutputRestoreContext(
+        ys_mean=ys_mean,
+        fs_mean=fs_mean,
+        te_mean=te_mean,
+        te_std=te_std,
+        target_ys_physical=target_ys_phys,
+        target_fs_physical=target_fs_phys,
     )
     if targets_physical:
         logger.info(
@@ -327,6 +339,7 @@ def main() -> None:
         original_parents[: args.pop_size] if len(original_parents) > args.pop_size else original_parents,
         target_ys=target_ys,
         target_fs=target_fs,
+        restore=restore,
         ys_fs_from_labels=True,
     )
 
@@ -367,6 +380,7 @@ def main() -> None:
             population,
             target_ys=target_ys,
             target_fs=target_fs,
+            restore=restore,
             new_virtual_count=args.pop_size,
         )
 
@@ -384,15 +398,6 @@ def main() -> None:
         "summary_txt": str((args.out_dir / "ga_summary.txt").resolve()),
         "scatter_png": str((args.out_dir / "pareto_scatter.png").resolve()),
     }
-    te_mean, te_std = load_testenv_stats_np(_resolve_testenv_stats_path(args.data_dir, root))
-    restore = OutputRestoreContext(
-        ys_mean=ys_mean,
-        fs_mean=fs_mean,
-        te_mean=te_mean,
-        te_std=te_std,
-        target_ys_physical=target_ys_phys,
-        target_fs_physical=target_fs_phys,
-    )
     summary = build_archive_summary(
         archive,
         front,

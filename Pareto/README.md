@@ -57,6 +57,8 @@ CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 
 内部 NSGA-II 仍在模型归一化空间优化；归档 JSON/TXT 做逆变换。
 
+每代日志中 coldway 各阶段**统一显示物理量 `T`、`t`**（不再对方式 2/3 误标为 C_a/C_b），数值固定 4 位小数。
+
 每代日志展示：**当前种群帕累托代表** + **前沿个体数**。
 
 ## 自检
@@ -65,4 +67,5 @@ CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 python -m Pareto.ga_archive
 python -m Pareto.test_archive_smoke
 python -m Pareto.test_pareto_output_restore
+python -m Pareto.test_pareto_coldway_display
 ```
