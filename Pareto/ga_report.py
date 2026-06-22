@@ -74,6 +74,7 @@ FIELD_DESCRIPTIONS_CN: Dict[str, str] = {
     "nearest_train_idx": "最近邻训练样本在原始图中的节点 id（0 基准，对应 material_graph 节点序号）",
     "knee_index": "加权和折中解在 individuals 中的索引",
     "pareto_representative": "最终种群帕累托代表（拥挤距离最大）",
+    "best_virtual": "基因库历史最优虚拟个体（加权分 f1+f2+0.1*f3 最小）",
     "gene_source": "基因来源（原始/杂交虚拟）",
     "field_descriptions": "字段中文说明",
 }
@@ -199,6 +200,11 @@ def build_archive_summary(
         else None
     )
 
+    best_v = archive.best_virtual_entry()
+    best_virtual_dict = (
+        _entry_to_dict(best_v, restore) if best_v is not None else None
+    )
+
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "target_ys": target_ys,
@@ -217,6 +223,7 @@ def build_archive_summary(
         "num_original": archive.num_original(),
         "num_virtual": archive.num_virtual(),
         "pareto_representative": rep_dict,
+        "best_virtual": best_virtual_dict,
         "pareto_front_size": len(individuals),
         "knee_index": knee,
         "individuals": individuals,
@@ -251,6 +258,7 @@ def write_ga_summary_txt(path: Path, summary: Dict[str, Any]) -> None:
         "",
     ]
     _append_best_dict_lines(lines, "种群帕累托代表", summary.get("pareto_representative"))
+    _append_best_dict_lines(lines, "基因库最优虚拟个体", summary.get("best_virtual"))
     inds = summary.get("individuals", [])
     knee = summary.get("knee_index", 0)
     if inds:

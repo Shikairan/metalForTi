@@ -29,16 +29,19 @@ _LINE = "─" * 72
 _COLDWAY_STAGES = 3
 
 
-def _fmt_objective(v: float, nd: int = 4) -> str:
-    """NSGA-II 目标值：0 也显式打印，避免与「未启用」混淆。"""
-    if abs(v) < 1e-12:
-        return f"{0.0:.{nd}f}"
-    return _fmt(v, nd=nd)
+def _fmt(v: float, nd: int = 4) -> str:
     if abs(v) < 1e-12:
         return "—"
     if abs(v) >= 1000 or (abs(v) < 1e-2 and v != 0):
         return f"{v:.3e}"
     return f"{v:.{nd}f}"
+
+
+def _fmt_objective(v: float, nd: int = 4) -> str:
+    """NSGA-II 目标值：0 也显式打印，避免与「未启用」混淆。"""
+    if abs(v) < 1e-12:
+        return f"{0.0:.{nd}f}"
+    return _fmt(v, nd=nd)
 
 
 def _fmt_coldway_val(v: float, nd: int = 4) -> str:
@@ -214,7 +217,7 @@ def format_generation_block(
     if virtual_genome is not None and virtual_fitness is not None:
         lines.extend(
             _format_one_solution(
-                "辅助展示",
+                "基因库最优虚拟个体",
                 virtual_genome,
                 virtual_fitness,
                 target_ys=target_ys,
