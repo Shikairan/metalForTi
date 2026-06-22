@@ -82,7 +82,7 @@ def _log_generation(
     ys_fs_from_labels: bool = False,
     new_virtual_count: int = 0,
 ) -> None:
-    """打印当前代种群帕累托代表与前沿规模。"""
+    """打印当前代种群帕累托代表、基因库最优虚拟个体与前沿规模。"""
     if not population:
         logger.warning("%s: 种群为空", gen_label)
         return
@@ -95,6 +95,19 @@ def _log_generation(
     entry = _find_archive_entry(archive, rep)
     gene_source = entry.source_label() if entry is not None else "当前种群帕累托代表"
 
+    best_v = archive.best_virtual_entry()
+    virtual_genome = None
+    virtual_fitness = None
+    virtual_gene_source = None
+    virtual_same_as_overall = False
+    if best_v is not None:
+        virtual_genome = best_v.genome
+        virtual_fitness = best_v.fitness
+        virtual_gene_source = best_v.source_label()
+        virtual_same_as_overall = torch.allclose(
+            rep.genome.cpu(), best_v.genome.cpu(), atol=1e-5, rtol=0
+        )
+
     block = format_generation_block(
         gen_label,
         len(front),
@@ -106,8 +119,10 @@ def _log_generation(
         archive_size=archive.size(),
         new_virtual_count=new_virtual_count,
         gene_source=gene_source,
-        virtual_genome=None,
-        virtual_fitness=None,
+        virtual_genome=virtual_genome,
+        virtual_fitness=virtual_fitness,
+        virtual_gene_source=virtual_gene_source,
+        virtual_same_as_overall=virtual_same_as_overall,
         restore=restore,
     )
     logger.info("%s", block)
