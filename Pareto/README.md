@@ -65,7 +65,11 @@ CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 | `ys_pred` / `fs_pred` | GNN 预测 YS/FS（**data1123 量纲**） |
 | `f1_ys_abs_err` / `f2_fs_abs_err` | 物理量纲下的 \|预测 − 目标\| |
 
-内部 NSGA-II 仍在模型归一化空间优化；归档 JSON/TXT 做逆变换。
+内部 NSGA-II 仍在**模型量纲**（`ys.pt`/`fs.pt` 刻度）下以 f1/f2/f3 优化；日志与 JSON 中的 data1123 数值及「展示误差」仅便于阅读，**不参与**非支配排序与环境选择。
+
+每代日志会同时打印：
+- **误差（展示）**：物理量纲下的 |ΔYS|/|ΔFS|
+- **f1/f2/f3（NSGA-II 优化）**：模型量纲，与实际帕累托排序一致
 
 每代日志中 coldway 各阶段**统一显示物理量 `T`、`t`**（不再对方式 2/3 误标为 C_a/C_b），数值固定 4 位小数。
 

@@ -121,8 +121,8 @@ def _format_one_solution(
         ys_mean=restore.ys_mean,
         fs_mean=restore.fs_mean,
     )
-    f1 = abs(ys_pred - restore.target_ys_physical)
-    f2 = abs(fs_pred - restore.target_fs_physical)
+    f1_phys = abs(ys_pred - restore.target_ys_physical)
+    f2_phys = abs(fs_pred - restore.target_fs_physical)
     tgt_ys = restore.target_ys_physical
     tgt_fs = restore.target_fs_physical
     unit_note = "data1123"
@@ -133,10 +133,11 @@ def _format_one_solution(
     if gene_source:
         lines.append(f"    基因来源：{gene_source}")
     lines.extend([
-        f"    【目标与预测（{unit_note}）】",
+        f"    【目标与预测（{unit_note}，仅展示）】",
         f"      目标    YS = {_fmt(tgt_ys):>10}    FS = {_fmt(tgt_fs):>10}",
         f"      {pred_label:<6}  YS = {_fmt(ys_pred):>10}    FS = {_fmt(fs_pred):>10}",
-        f"      误差    |ΔYS| = {_fmt(f1):>8}    |ΔFS| = {_fmt(f2):>8}    锚定L2 = {_fmt(fitness.f3):>8}",
+        f"      误差（展示） |ΔYS| = {_fmt(f1_phys):>8}    |ΔFS| = {_fmt(f2_phys):>8}",
+        f"      误差（NSGA-II 优化，模型量纲） f1={_fmt(fitness.f1):>8}  f2={_fmt(fitness.f2):>8}  f3={_fmt(fitness.f3):>8}",
         "",
         "    【合金成分 wt%】",
     ])
