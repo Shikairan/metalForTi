@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import torch
 
 logger = logging.getLogger("Pareto.ga_report")
@@ -22,16 +24,32 @@ from grd.feature_layout import (
     TESTENV_SLICE,
     compute_ti_balance,
 )
+from preprocess.preprocess_datagnn_repro import (
+    denormalize_genome_to_data1123,
+    denormalize_targets_to_data1123,
+)
 from Pareto.ga_archive import ArchiveEntry, GeneArchive, weighted_score
 from Pareto.ga_evaluate import FitnessResult
 from Pareto.ga_nsga2 import Individual
+
+
+@dataclass
+class OutputRestoreContext:
+    """Pareto 输出数值还原为 data1123 物理量纲。"""
+
+    ys_mean: float
+    fs_mean: float
+    te_mean: np.ndarray
+    te_std: np.ndarray
+    target_ys_physical: float
+    target_fs_physical: float
 
 FIELD_DESCRIPTIONS_CN: Dict[str, str] = {
     "generated_at_utc": "报告生成时间（UTC）",
     "target_ys": "用户目标屈服强度 YS（模型量纲，与 ys.pt 一致）",
     "target_fs": "用户目标 FS（模型量纲，与 fs.pt 一致）",
-    "target_ys_physical": "用户输入的物理量 YS（MPa）",
-    "target_fs_physical": "用户输入的物理量 FS",
+    "target_ys_physical": "用户输入的 YS（与 data1123.csv 同量纲，MPa）",
+    "target_fs_physical": "用户输入的 FS（与 data1123.csv 同量纲，如 0.147）",
     "targets_physical_input": "CLI 是否将 target 视为物理量",
     "label_means": "全表 YS/FS 均值（归一化用）",
     "objectives": "优化目标模式：three 或 two",
@@ -43,16 +61,16 @@ FIELD_DESCRIPTIONS_CN: Dict[str, str] = {
     "selection_method": "父本/存活选择算法（NSGA-II）",
     "pareto_front_size": "第一非支配层个体数",
     "individuals": "帕累托前沿个体列表",
-    "genome_30d": "30 维基因组（element+testenv+coldway）",
+    "genome_30d": "30 维基因组（data1123 物理量纲：element 10 + tem/sr 2 + coldway 18）",
     "element_wt_pct": "10 元含量 wt%",
     "ti_balance_wt_pct": "钛余量 wt%",
-    "testenv_z": "试验环境 tem/fcr z-score",
-    "coldway_3x6": "coldway 重塑为 3×6",
-    "f1_ys_abs_err": "|预测 YS - 目标 YS|",
-    "f2_fs_abs_err": "|预测 FS - 目标 FS|",
+    "testenv": "试验环境 tem、sr（物理量，与 data1123 一致）",
+    "coldway_3x6": "coldway 18 维重塑为 3×6（物理 T/t，0 表示未激活槽）",
+    "f1_ys_abs_err": "|预测 YS - 目标 YS|（data1123 量纲）",
+    "f2_fs_abs_err": "|预测 FS - 目标 FS|（data1123 量纲）",
     "f3_anchor_l2": "与训练集最近邻的 L2 距离",
-    "ys_pred": "GNN 预测 YS",
-    "fs_pred": "GNN 预测 FS",
+    "ys_pred": "GNN 预测 YS（data1123 量纲，MPa）",
+    "fs_pred": "GNN 预测 FS（data1123 量纲）",
     "nearest_train_idx": "最近邻训练样本在原始图中的节点 id（0 基准，对应 material_graph 节点序号）",
     "knee_index": "加权和折中解在 individuals 中的索引",
     "pareto_representative": "最终种群帕累托代表（拥挤距离最大）",
@@ -64,28 +82,46 @@ FIELD_DESCRIPTIONS_CN: Dict[str, str] = {
 def _individual_to_dict(
     genome: torch.Tensor,
     fit: FitnessResult,
+    restore: OutputRestoreContext,
 ) -> Dict[str, Any]:
-    g = genome.detach().cpu().float()
-    elem = {name: float(g[i].item()) for i, name in enumerate(ELEMENT_NAMES)}
-    ti = float(compute_ti_balance(g.unsqueeze(0), DEFAULT_TOTAL_WT)[0].item())
-    cw = g[COLDWAY_SLICE].reshape(3, 6).tolist()
+    g_model = genome.detach().cpu().float()
+    g_phys = torch.as_tensor(
+        denormalize_genome_to_data1123(
+            g_model.numpy(),
+            te_mean=restore.te_mean,
+            te_std=restore.te_std,
+        ),
+        dtype=torch.float32,
+    )
+    elem = {name: float(g_phys[i].item()) for i, name in enumerate(ELEMENT_NAMES)}
+    ti = float(compute_ti_balance(g_phys.unsqueeze(0), DEFAULT_TOTAL_WT)[0].item())
+    cw = g_phys[COLDWAY_SLICE].reshape(3, 6).tolist()
+    te = g_phys[TESTENV_SLICE].tolist()
+    ys_pred, fs_pred = denormalize_targets_to_data1123(
+        fit.ys_pred,
+        fit.fs_pred,
+        ys_mean=restore.ys_mean,
+        fs_mean=restore.fs_mean,
+    )
+    f1 = abs(ys_pred - restore.target_ys_physical)
+    f2 = abs(fs_pred - restore.target_fs_physical)
     return {
-        "genome_30d": g.tolist(),
+        "genome_30d": g_phys.tolist(),
         "element_wt_pct": elem,
         "ti_balance_wt_pct": ti,
-        "testenv_z": g[TESTENV_SLICE].tolist(),
+        "testenv": {"tem": te[0], "sr": te[1]},
         "coldway_3x6": cw,
-        "f1_ys_abs_err": fit.f1,
-        "f2_fs_abs_err": fit.f2,
+        "f1_ys_abs_err": f1,
+        "f2_fs_abs_err": f2,
         "f3_anchor_l2": fit.f3,
-        "ys_pred": fit.ys_pred,
-        "fs_pred": fit.fs_pred,
+        "ys_pred": ys_pred,
+        "fs_pred": fs_pred,
         "nearest_train_idx": fit.nearest_train_idx,
     }
 
 
-def _entry_to_dict(entry: ArchiveEntry) -> Dict[str, Any]:
-    d = _individual_to_dict(entry.genome, entry.fitness)
+def _entry_to_dict(entry: ArchiveEntry, restore: OutputRestoreContext) -> Dict[str, Any]:
+    d = _individual_to_dict(entry.genome, entry.fitness, restore)
     d["gene_source"] = entry.source_label()
     d["is_original"] = entry.is_original
     d["weighted_score"] = weighted_score(entry.fitness)
@@ -104,7 +140,8 @@ def _append_best_dict_lines(lines: List[str], title: str, rec: Optional[Dict[str
         f"  f1 (|ΔYS|): {rec['f1_ys_abs_err']:.6f}",
         f"  f2 (|ΔFS|): {rec['f2_fs_abs_err']:.6f}",
         f"  f3 (锚定 L2): {rec.get('f3_anchor_l2', 0):.6f}",
-        f"  预测 YS/FS: {rec['ys_pred']:.6f} / {rec['fs_pred']:.6f}",
+        f"  预测 YS/FS（data1123）: {rec['ys_pred']:.4f} / {rec['fs_pred']:.6f}",
+        f"  tem / sr: {rec['testenv']['tem']:.4f} / {rec['testenv']['sr']:.4f}",
         f"  Ti 余量 wt%: {rec['ti_balance_wt_pct']:.4f}",
         "",
     ])
@@ -141,20 +178,23 @@ def build_archive_summary(
     target_fs_physical: Optional[float] = None,
     targets_physical: bool = False,
     label_means: Optional[Dict[str, float]] = None,
+    restore: Optional[OutputRestoreContext] = None,
 ) -> Dict[str, Any]:
     """从最终种群帕累托前沿构建报告。"""
+    if restore is None:
+        raise ValueError("restore context is required for physical output")
     individuals = []
     for ind in front:
         if ind.fitness is None:
             continue
-        individuals.append(_individual_to_dict(ind.genome, ind.fitness))
+        individuals.append(_individual_to_dict(ind.genome, ind.fitness, restore))
     knee = find_knee_index(individuals) if individuals else 0
 
     from Pareto.ga_nsga2 import pareto_representative
 
     rep = pareto_representative(front) if front else None
     rep_dict = (
-        _individual_to_dict(rep.genome, rep.fitness)
+        _individual_to_dict(rep.genome, rep.fitness, restore)
         if rep is not None and rep.fitness is not None
         else None
     )
@@ -199,8 +239,8 @@ def write_ga_summary_txt(path: Path, summary: Dict[str, Any]) -> None:
         f"生成时间（UTC）: {summary.get('generated_at_utc', '')}",
         f"目标 YS（模型量纲）: {summary.get('target_ys')}",
         f"目标 FS（模型量纲）: {summary.get('target_fs')}",
-        f"目标 YS（物理量）: {summary.get('target_ys_physical', '—')}",
-        f"目标 FS（物理量）: {summary.get('target_fs_physical', '—')}",
+        f"目标 YS（data1123）: {summary.get('target_ys_physical', '—')}",
+        f"目标 FS（data1123）: {summary.get('target_fs_physical', '—')}",
         f"优化目标: {summary.get('objectives')}",
         f"选择算法: {summary.get('selection_method', 'NSGA-II')}",
         f"设备: {summary.get('device')}",
@@ -220,7 +260,8 @@ def write_ga_summary_txt(path: Path, summary: Dict[str, Any]) -> None:
             f"  f1 (|ΔYS|): {k['f1_ys_abs_err']:.6f}",
             f"  f2 (|ΔFS|): {k['f2_fs_abs_err']:.6f}",
             f"  f3 (锚定 L2): {k.get('f3_anchor_l2', 0):.6f}",
-            f"  预测 YS/FS: {k['ys_pred']:.6f} / {k['fs_pred']:.6f}",
+            f"  预测 YS/FS（data1123）: {k['ys_pred']:.4f} / {k['fs_pred']:.6f}",
+            f"  tem / sr: {k['testenv']['tem']:.4f} / {k['testenv']['sr']:.4f}",
             f"  Ti 余量 wt%: {k['ti_balance_wt_pct']:.4f}",
             "",
         ])

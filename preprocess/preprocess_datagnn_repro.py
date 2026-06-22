@@ -24,6 +24,17 @@ DEFAULT_TESTENV_STD = np.array([214.62536752046483, 1547.0319516107018], dtype=n
 DEFAULT_YS_MEAN = 965.7821034430465
 DEFAULT_FS_MEAN = 28.120464644701983
 
+# data1123.csv → dataOri2.csv：FS 额外乘以 100（YS 两级相同）
+FS_DATA1123_TO_DATAORI2_SCALE = 100.0
+
+
+def fs_data1123_to_dataori2(fs_data1123: float) -> float:
+    return float(fs_data1123) * FS_DATA1123_TO_DATAORI2_SCALE
+
+
+def fs_dataori2_to_data1123(fs_dataori2: float) -> float:
+    return float(fs_dataori2) / FS_DATA1123_TO_DATAORI2_SCALE
+
 
 def normalize_targets_physical(
     ys_physical: float,
@@ -33,11 +44,25 @@ def normalize_targets_physical(
     fs_mean: float = DEFAULT_FS_MEAN,
     eps: float = EPS,
 ) -> Tuple[float, float]:
-    """物理量 YS/FS → 与 ys.pt / fs.pt 同量纲（列均值归一化）。"""
+    """dataOri2 量纲 YS/FS → 与 ys.pt / fs.pt 同量纲（列均值归一化）。"""
     return (
         float(ys_physical) / (float(ys_mean) + eps),
         float(fs_physical) / (float(fs_mean) + eps),
     )
+
+
+def normalize_targets_from_data1123(
+    ys_physical: float,
+    fs_data1123: float,
+    *,
+    ys_mean: float = DEFAULT_YS_MEAN,
+    fs_mean: float = DEFAULT_FS_MEAN,
+    eps: float = EPS,
+) -> Tuple[float, float]:
+    """data1123 原始 YS/FS → 模型量纲（FS 先 ×100 再除以全表 FS 均值）。"""
+    ys_model = float(ys_physical) / (float(ys_mean) + eps)
+    fs_model = fs_data1123_to_dataori2(fs_data1123) / (float(fs_mean) + eps)
+    return ys_model, fs_model
 
 
 def denormalize_targets_model(
@@ -48,11 +73,26 @@ def denormalize_targets_model(
     fs_mean: float = DEFAULT_FS_MEAN,
     eps: float = EPS,
 ) -> Tuple[float, float]:
-    """模型量纲 YS/FS → 物理量（逆变换）。"""
+    """模型量纲 → dataOri2 物理量 YS/FS。"""
     return (
         float(ys_model) * (float(ys_mean) + eps),
         float(fs_model) * (float(fs_mean) + eps),
     )
+
+
+def denormalize_targets_to_data1123(
+    ys_model: float,
+    fs_model: float,
+    *,
+    ys_mean: float = DEFAULT_YS_MEAN,
+    fs_mean: float = DEFAULT_FS_MEAN,
+    eps: float = EPS,
+) -> Tuple[float, float]:
+    """模型量纲 → data1123 原始 YS/FS。"""
+    ys_phys, fs_dataori2 = denormalize_targets_model(
+        ys_model, fs_model, ys_mean=ys_mean, fs_mean=fs_mean, eps=eps
+    )
+    return ys_phys, fs_dataori2_to_data1123(fs_dataori2)
 
 
 def label_means_from_arrays(ys, fs) -> Tuple[float, float]:
@@ -60,6 +100,59 @@ def label_means_from_arrays(ys, fs) -> Tuple[float, float]:
     y = np.asarray(ys, dtype=np.float64)
     f = np.asarray(fs, dtype=np.float64)
     return float(y.mean()), float(f.mean())
+
+
+def load_testenv_stats_np(stats_path: Path) -> Tuple[np.ndarray, np.ndarray]:
+    """读取 testenv_stats.csv → (mean, std)，列顺序 tem, fcr。"""
+    with stats_path.open("r", newline="", encoding="utf-8") as f:
+        rows = {row["col"]: row for row in csv.DictReader(f)}
+    mean = np.array([float(rows["tem"]["mean"]), float(rows["fcr"]["mean"])], dtype=np.float64)
+    std = np.array([float(rows["tem"]["std"]), float(rows["fcr"]["std"])], dtype=np.float64)
+    return mean, std
+
+
+def inverse_testenv_z(
+    testenv_z: np.ndarray,
+    *,
+    te_mean: np.ndarray = DEFAULT_TESTENV_MEAN,
+    te_std: np.ndarray = DEFAULT_TESTENV_STD,
+) -> np.ndarray:
+    """testenv z-score → 物理 tem, fcr（与 data1123 中 tem/sr 数值一致）。"""
+    z = np.asarray(testenv_z, dtype=np.float64)
+    std_safe = np.where(np.asarray(te_std, dtype=np.float64) == 0, 1.0, te_std).astype(np.float64)
+    return (z * std_safe + te_mean).astype(np.float32)
+
+
+def inverse_coldway_flat_18(flat18: np.ndarray) -> np.ndarray:
+    """18 维展平向量内，将 log 缩放的 T/t 还原为物理值（layout 不变）。"""
+    cell = np.asarray(flat18, dtype=np.float32).reshape(3, 6).reshape(3, 3, 2).copy()
+    for i in range(3):
+        for j in range(3):
+            Ts, ts = float(cell[i, j, 0]), float(cell[i, j, 1])
+            if Ts != 0.0 or ts != 0.0:
+                cell[i, j, 0] = np.float32(T_DIV * np.exp(Ts))
+                cell[i, j, 1] = np.float32(np.exp(ts))
+    return cell.reshape(3, 6).reshape(-1).astype(np.float32)
+
+
+def denormalize_genome_to_data1123(
+    genome_30d,
+    *,
+    te_mean: np.ndarray = DEFAULT_TESTENV_MEAN,
+    te_std: np.ndarray = DEFAULT_TESTENV_STD,
+) -> np.ndarray:
+    """
+    模型空间 30 维 → data1123 物理数值（仍为 30 维）：
+      [0:10]  element  wt% 不变
+      [10:12] testenv tem, fcr/sr 反 z-score
+      [12:30] coldway 18 维内 T/t 做 exp 还原
+    """
+    g = np.asarray(genome_30d, dtype=np.float32).reshape(30)
+    out = np.empty(30, dtype=np.float32)
+    out[0:10] = g[0:10]
+    out[10:12] = inverse_testenv_z(g[10:12], te_mean=te_mean, te_std=te_std)
+    out[12:30] = inverse_coldway_flat_18(g[12:30])
+    return out
 
 
 def normalize_coldway_tx_cx(raw: np.ndarray) -> np.ndarray:
