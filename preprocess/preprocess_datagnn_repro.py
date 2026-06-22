@@ -24,6 +24,17 @@ DEFAULT_TESTENV_STD = np.array([214.62536752046483, 1547.0319516107018], dtype=n
 DEFAULT_YS_MEAN = 965.7821034430465
 DEFAULT_FS_MEAN = 28.120464644701983
 
+# data1123.csv → dataOri2.csv：FS 额外乘以 100（YS 两级相同）
+FS_DATA1123_TO_DATAORI2_SCALE = 100.0
+
+
+def fs_data1123_to_dataori2(fs_data1123: float) -> float:
+    return float(fs_data1123) * FS_DATA1123_TO_DATAORI2_SCALE
+
+
+def fs_dataori2_to_data1123(fs_dataori2: float) -> float:
+    return float(fs_dataori2) / FS_DATA1123_TO_DATAORI2_SCALE
+
 
 def normalize_targets_physical(
     ys_physical: float,
@@ -33,11 +44,25 @@ def normalize_targets_physical(
     fs_mean: float = DEFAULT_FS_MEAN,
     eps: float = EPS,
 ) -> Tuple[float, float]:
-    """物理量 YS/FS → 与 ys.pt / fs.pt 同量纲（列均值归一化）。"""
+    """dataOri2 量纲 YS/FS → 与 ys.pt / fs.pt 同量纲（列均值归一化）。"""
     return (
         float(ys_physical) / (float(ys_mean) + eps),
         float(fs_physical) / (float(fs_mean) + eps),
     )
+
+
+def normalize_targets_from_data1123(
+    ys_physical: float,
+    fs_data1123: float,
+    *,
+    ys_mean: float = DEFAULT_YS_MEAN,
+    fs_mean: float = DEFAULT_FS_MEAN,
+    eps: float = EPS,
+) -> Tuple[float, float]:
+    """data1123 原始 YS/FS → 模型量纲（FS 先 ×100 再除以全表 FS 均值）。"""
+    ys_model = float(ys_physical) / (float(ys_mean) + eps)
+    fs_model = fs_data1123_to_dataori2(fs_data1123) / (float(fs_mean) + eps)
+    return ys_model, fs_model
 
 
 def denormalize_targets_model(
@@ -48,11 +73,26 @@ def denormalize_targets_model(
     fs_mean: float = DEFAULT_FS_MEAN,
     eps: float = EPS,
 ) -> Tuple[float, float]:
-    """模型量纲 YS/FS → 物理量（逆变换）。"""
+    """模型量纲 → dataOri2 物理量 YS/FS。"""
     return (
         float(ys_model) * (float(ys_mean) + eps),
         float(fs_model) * (float(fs_mean) + eps),
     )
+
+
+def denormalize_targets_to_data1123(
+    ys_model: float,
+    fs_model: float,
+    *,
+    ys_mean: float = DEFAULT_YS_MEAN,
+    fs_mean: float = DEFAULT_FS_MEAN,
+    eps: float = EPS,
+) -> Tuple[float, float]:
+    """模型量纲 → data1123 原始 YS/FS。"""
+    ys_phys, fs_dataori2 = denormalize_targets_model(
+        ys_model, fs_model, ys_mean=ys_mean, fs_mean=fs_mean, eps=eps
+    )
+    return ys_phys, fs_dataori2_to_data1123(fs_dataori2)
 
 
 def label_means_from_arrays(ys, fs) -> Tuple[float, float]:

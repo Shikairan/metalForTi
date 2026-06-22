@@ -16,9 +16,9 @@ from typing import List, Optional
 import torch
 
 from preprocess.preprocess_datagnn_repro import (
-    denormalize_targets_model,
+    denormalize_targets_to_data1123,
     label_means_from_arrays,
-    normalize_targets_physical,
+    normalize_targets_from_data1123,
 )
 from grd.feature_layout import bounds_from_train_x, build_projector
 from grd.io_utils import load_dual_rgat, load_graph_bundle, merge_hetero_edges
@@ -128,33 +128,33 @@ def _resolve_targets(
     targets_physical: bool,
 ) -> tuple[float, float, float, float, float, float]:
     """
-    返回 (target_ys_model, target_fs_model, target_ys_physical, target_fs_physical, ys_mean, fs_mean)。
-  若 targets_physical=False，物理量字段与输入相同（假定已是模型量纲）。
+    返回 (target_ys_model, target_fs_model, target_ys_input, target_fs_input, ys_mean, fs_mean)。
+    targets_physical=True 时，输入与 data1123.csv 同量纲（FS 为小数，如 0.147）。
     """
     ys_mean, fs_mean = label_means_from_arrays(ys.cpu().numpy(), fs.cpu().numpy())
     if targets_physical:
-        ys_phys, fs_phys = float(target_ys), float(target_fs)
-        ys_model, fs_model = normalize_targets_physical(
-            ys_phys, fs_phys, ys_mean=ys_mean, fs_mean=fs_mean
+        ys_in, fs_in = float(target_ys), float(target_fs)
+        ys_model, fs_model = normalize_targets_from_data1123(
+            ys_in, fs_in, ys_mean=ys_mean, fs_mean=fs_mean
         )
-        return ys_model, fs_model, ys_phys, fs_phys, ys_mean, fs_mean
+        return ys_model, fs_model, ys_in, fs_in, ys_mean, fs_mean
     ys_model, fs_model = float(target_ys), float(target_fs)
-    ys_phys, fs_phys = denormalize_targets_model(
+    ys_in, fs_in = denormalize_targets_to_data1123(
         ys_model, fs_model, ys_mean=ys_mean, fs_mean=fs_mean
     )
-    return ys_model, fs_model, ys_phys, fs_phys, ys_mean, fs_mean
+    return ys_model, fs_model, ys_in, fs_in, ys_mean, fs_mean
 
 
 def _parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parents[1]
     p = argparse.ArgumentParser(description="NSGA-II 帕累托遗传逆设计")
-    p.add_argument("--target-ys", type=float, required=True, help="目标 YS（默认物理量 MPa；加 --targets-physical）")
-    p.add_argument("--target-fs", type=float, required=True, help="目标 FS（默认物理量；加 --targets-physical）")
+    p.add_argument("--target-ys", type=float, required=True, help="目标 YS（与 data1123.csv 同量纲，MPa）")
+    p.add_argument("--target-fs", type=float, required=True, help="目标 FS（与 data1123.csv 同量纲，如 0.147）")
     p.add_argument(
         "--targets-physical",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="target-ys/fs 为预处理前物理量，自动除以全表 YS/FS 均值（默认开启；用 --no-targets-physical 表示已是模型量纲）",
+        help="target-ys/fs 为 data1123 原始量纲，自动换算为模型量纲（默认开启；--no-targets-physical 表示已是 ys.pt/fs.pt 量纲）",
     )
     p.add_argument("--data-dir", type=Path, default=root / "gnnDir" / "gnndataPT" / "r-gatPT")
     p.add_argument(
@@ -244,8 +244,8 @@ def main() -> None:
     )
     if targets_physical:
         logger.info(
-            "目标（物理量）YS=%.4f FS=%.4f → 模型量纲 YS=%.6f FS=%.6f "
-            "(全表均值 YS=%.4f FS=%.4f)",
+            "目标（data1123）YS=%.4f FS=%.6f → 模型量纲 YS=%.6f FS=%.6f "
+            "(全表均值 YS=%.4f FS_dataOri2=%.4f)",
             target_ys_phys,
             target_fs_phys,
             target_ys,
@@ -255,7 +255,7 @@ def main() -> None:
         )
     else:
         logger.info(
-            "目标（模型量纲）YS=%.6f FS=%.6f | 对应物理量 YS=%.4f FS=%.4f",
+            "目标（模型量纲）YS=%.6f FS=%.6f | 对应 data1123 YS=%.4f FS=%.6f",
             target_ys,
             target_fs,
             target_ys_phys,
