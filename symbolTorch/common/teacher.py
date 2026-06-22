@@ -7,13 +7,29 @@ from pathlib import Path
 
 import torch
 
-from .constants import GAT_HEADS, NUM_RELATIONS, RGAT_DOUBLE_DIR
+from .constants import GAT_HEADS, MODEL_ALL_DIR, NUM_RELATIONS, RGAT_DOUBLE_DIR
 
 
 def _ensure_rgat_import() -> None:
-    p = str(RGAT_DOUBLE_DIR)
-    if p not in sys.path:
-        sys.path.insert(0, p)
+    for d in (MODEL_ALL_DIR, RGAT_DOUBLE_DIR):
+        p = str(d)
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+
+def _load_rgat_dual(in_dim: int, hidden_dim: int, num_relations: int, heads: int, dropout: float, device):
+    _ensure_rgat_import()
+    try:
+        from model_rgat import RGAT_Dual  # noqa: WPS433
+    except ImportError:
+        from model_gat import RGAT_Dual  # noqa: WPS433
+    return RGAT_Dual(
+        in_dim=in_dim,
+        hidden_dim=hidden_dim,
+        num_relations=num_relations,
+        heads=heads,
+        dropout=dropout,
+    ).to(device)
 
 
 def load_teacher(
@@ -26,25 +42,23 @@ def load_teacher(
     heads: int = GAT_HEADS,
     dropout: float = 0.2,
 ) -> torch.nn.Module:
-    _ensure_rgat_import()
-    from model_gat import RGAT_Dual  # noqa: WPS433
-
     if not ckpt_path.is_file():
         hint = (
             f"Checkpoint not found: {ckpt_path}\n"
             f"Train first:\n"
-            f"  cd {RGAT_DOUBLE_DIR}\n"
-            "  python train_fs_gat.py --data-dir <gnndataPT/r-gatPT> --out-dir runs\n"
+            f"  cd {MODEL_ALL_DIR}\n"
+            "  python build_data.py && python train.py\n"
         )
         raise FileNotFoundError(hint)
 
-    model = RGAT_Dual(
+    model = _load_rgat_dual(
         in_dim=in_dim,
         hidden_dim=hidden_dim,
         num_relations=num_relations,
         heads=heads,
         dropout=dropout,
-    ).to(device)
+        device=device,
+    )
 
     blob = torch.load(ckpt_path, map_location=device, weights_only=False)
     if isinstance(blob, dict) and "model_state_dict" in blob:

@@ -44,7 +44,7 @@ def main() -> int:
         print("  Hint: cd metalForTi/gnnDir && python regenerate_rgnnpt.py --pt-bundle rgat")
         ok = False
     if not DEFAULT_CKPT.is_file():
-        print("  Hint: cd metalForTi/gnnDir/gnn/r-gatDouble && python train_fs_gat.py ...")
+        print("  Hint: cd metalForTi/modelAll && python build_data.py && python train.py")
         ok = False
 
     return 0 if ok else 1

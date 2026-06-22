@@ -7,10 +7,12 @@ from pathlib import Path
 SYMBOL_TORCH_ROOT = Path(__file__).resolve().parents[1]
 METAL_FOR_TI_ROOT = SYMBOL_TORCH_ROOT.parent
 GNN_DIR = METAL_FOR_TI_ROOT / "gnnDir"
+MODEL_ALL_DIR = METAL_FOR_TI_ROOT / "modelAll"
 RGAT_DOUBLE_DIR = GNN_DIR / "gnn" / "r-gatDouble"
 
 DEFAULT_DATA_DIR = GNN_DIR / "gnndataPT" / "r-gatPT"
-DEFAULT_CKPT = RGAT_DOUBLE_DIR / "runs" / "best_ysfs_gat.pt"
+DEFAULT_CKPT = MODEL_ALL_DIR / "runs" / "best_rgat_full.pt"
+DEFAULT_MODEL_DIR = MODEL_ALL_DIR
 
 NUM_RELATIONS = 3
 GAT_HEADS = 4

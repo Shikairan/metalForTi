@@ -2,6 +2,6 @@
   "block_name": "tabular_ys",
   "slime": false,
   "equations": {
-    "0": "None"
+    "0": "fcr*0.14712471 + tem*(-0.21390598) + 0.9633571"
   }
 }

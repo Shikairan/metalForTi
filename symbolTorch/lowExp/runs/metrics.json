@@ -2,17 +2,17 @@
   "experiment": "lowExp",
   "graph_at_inference": false,
   "teacher": {
-    "train_mae_ys": 0.5291206240653992,
-    "train_mae_fs": 0.8469770550727844,
-    "val_mae_ys": 0.585630476474762,
-    "val_mae_fs": 0.8718855381011963
+    "train_mae_ys": 0.10223851352930069,
+    "train_mae_fs": 0.12589150667190552,
+    "val_mae_ys": 0.09303365647792816,
+    "val_mae_fs": 0.2051718533039093
   },
   "tabular_symbolic": {
-    "train_mae_ys": 0.5291012525558472,
-    "train_mae_fs": 0.8477849364280701,
-    "val_mae_ys": 0.5841293931007385,
-    "val_mae_fs": 0.8759000897407532
+    "train_mae_ys": 0.20969752967357635,
+    "train_mae_fs": 0.36399102210998535,
+    "val_mae_ys": 0.16390013694763184,
+    "val_mae_fs": 0.29977259039878845
   },
-  "graph_info_loss_val_mae_ys": -0.0015010833740234375,
-  "graph_info_loss_val_mae_fs": 0.004014551639556885
+  "graph_info_loss_val_mae_ys": 0.07086648046970367,
+  "graph_info_loss_val_mae_fs": 0.09460073709487915
 }

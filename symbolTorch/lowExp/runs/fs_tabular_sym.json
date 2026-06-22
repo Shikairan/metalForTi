@@ -2,6 +2,6 @@
   "block_name": "tabular_fs",
   "slime": false,
   "equations": {
-    "0": "None"
+    "0": "-coldway_0 + tem*0.26966035 + 1.0332662"
   }
 }

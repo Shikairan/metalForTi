@@ -3,6 +3,11 @@
 
 from __future__ import annotations
 
+import os
+
+# symtorch 会对符号 forward 做 torch.compile，CPU 上需要 g++；无编译器时禁用 dynamo
+os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+
 import argparse
 import logging
 import sys
