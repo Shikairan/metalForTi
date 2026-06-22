@@ -15,6 +15,11 @@ from typing import List, Optional
 
 import torch
 
+from preprocess.preprocess_datagnn_repro import (
+    denormalize_targets_model,
+    label_means_from_arrays,
+    normalize_targets_physical,
+)
 from grd.feature_layout import bounds_from_train_x, build_projector
 from grd.io_utils import load_dual_rgat, load_graph_bundle, merge_hetero_edges
 from Pareto.ga_archive import ArchiveEntry, GeneArchive
@@ -114,11 +119,43 @@ def _resolve_device(requested: str, force_cpu: bool) -> str:
     return requested
 
 
+def _resolve_targets(
+    target_ys: float,
+    target_fs: float,
+    ys: torch.Tensor,
+    fs: torch.Tensor,
+    *,
+    targets_physical: bool,
+) -> tuple[float, float, float, float, float, float]:
+    """
+    返回 (target_ys_model, target_fs_model, target_ys_physical, target_fs_physical, ys_mean, fs_mean)。
+  若 targets_physical=False，物理量字段与输入相同（假定已是模型量纲）。
+    """
+    ys_mean, fs_mean = label_means_from_arrays(ys.cpu().numpy(), fs.cpu().numpy())
+    if targets_physical:
+        ys_phys, fs_phys = float(target_ys), float(target_fs)
+        ys_model, fs_model = normalize_targets_physical(
+            ys_phys, fs_phys, ys_mean=ys_mean, fs_mean=fs_mean
+        )
+        return ys_model, fs_model, ys_phys, fs_phys, ys_mean, fs_mean
+    ys_model, fs_model = float(target_ys), float(target_fs)
+    ys_phys, fs_phys = denormalize_targets_model(
+        ys_model, fs_model, ys_mean=ys_mean, fs_mean=fs_mean
+    )
+    return ys_model, fs_model, ys_phys, fs_phys, ys_mean, fs_mean
+
+
 def _parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parents[1]
     p = argparse.ArgumentParser(description="NSGA-II 帕累托遗传逆设计")
-    p.add_argument("--target-ys", type=float, required=True, help="目标 YS（与 ys.pt 同量纲）")
-    p.add_argument("--target-fs", type=float, required=True, help="目标 FS（与 fs.pt 同量纲）")
+    p.add_argument("--target-ys", type=float, required=True, help="目标 YS（默认物理量 MPa；加 --targets-physical）")
+    p.add_argument("--target-fs", type=float, required=True, help="目标 FS（默认物理量；加 --targets-physical）")
+    p.add_argument(
+        "--targets-physical",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="target-ys/fs 为预处理前物理量，自动除以全表 YS/FS 均值（默认开启；用 --no-targets-physical 表示已是模型量纲）",
+    )
     p.add_argument("--data-dir", type=Path, default=root / "gnnDir" / "gnndataPT" / "r-gatPT")
     p.add_argument(
         "--ckpt",
@@ -197,6 +234,33 @@ def main() -> None:
 
     logger.info("使用设备: %s | 算法: NSGA-II（非支配排序 + 拥挤距离）", device)
     x, ys, fs, train_mask, _ = load_graph_bundle(args.data_dir)
+    targets_physical = args.targets_physical
+    target_ys, target_fs, target_ys_phys, target_fs_phys, ys_mean, fs_mean = _resolve_targets(
+        args.target_ys,
+        args.target_fs,
+        ys,
+        fs,
+        targets_physical=targets_physical,
+    )
+    if targets_physical:
+        logger.info(
+            "目标（物理量）YS=%.4f FS=%.4f → 模型量纲 YS=%.6f FS=%.6f "
+            "(全表均值 YS=%.4f FS=%.4f)",
+            target_ys_phys,
+            target_fs_phys,
+            target_ys,
+            target_fs,
+            ys_mean,
+            fs_mean,
+        )
+    else:
+        logger.info(
+            "目标（模型量纲）YS=%.6f FS=%.6f | 对应物理量 YS=%.4f FS=%.4f",
+            target_ys,
+            target_fs,
+            target_ys_phys,
+            target_fs_phys,
+        )
     graph = torch.load(args.data_dir / "material_graph.pt", map_location="cpu", weights_only=False)
     edge_index, edge_type = merge_hetero_edges(graph)
     ctx = GraphContext.from_tensors(x, edge_index, edge_type)
@@ -213,8 +277,8 @@ def main() -> None:
         model,
         ctx,
         x_train,
-        args.target_ys,
-        args.target_fs,
+        target_ys,
+        target_fs,
         device,
         use_anchor=use_anchor,
         element_thr=args.element_thr,
@@ -246,8 +310,8 @@ def main() -> None:
         "代 0（原始池就绪，标签适应度）",
         evaluator,
         original_parents[: args.pop_size] if len(original_parents) > args.pop_size else original_parents,
-        target_ys=args.target_ys,
-        target_fs=args.target_fs,
+        target_ys=target_ys,
+        target_fs=target_fs,
         ys_fs_from_labels=True,
     )
 
@@ -286,8 +350,8 @@ def main() -> None:
             f"代 {gen}（NSGA-II 环境选择后）",
             evaluator,
             population,
-            target_ys=args.target_ys,
-            target_fs=args.target_fs,
+            target_ys=target_ys,
+            target_fs=target_fs,
             new_virtual_count=args.pop_size,
         )
 
@@ -308,8 +372,12 @@ def main() -> None:
     summary = build_archive_summary(
         archive,
         front,
-        target_ys=args.target_ys,
-        target_fs=args.target_fs,
+        target_ys=target_ys,
+        target_fs=target_fs,
+        target_ys_physical=target_ys_phys,
+        target_fs_physical=target_fs_phys,
+        targets_physical=targets_physical,
+        label_means={"ys": ys_mean, "fs": fs_mean},
         objectives=args.objectives,
         offspring_per_generation=args.pop_size,
         generations=args.generations,

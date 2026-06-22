@@ -14,8 +14,15 @@
 
 ```bash
 export PYTHONPATH="$(pwd):${PYTHONPATH}"
-python -m Pareto.run_ga_design --target-ys <float> --target-fs <float>
+
+# 输入物理量 YS/FS（MPa 等，预处理前数值，默认）
+python -m Pareto.run_ga_design --target-ys 1014.8 --target-fs 14.7
+
+# 若 target 已与 ys.pt/fs.pt 同量纲（均值归一化后）
+python -m Pareto.run_ga_design --target-ys 1.05 --target-fs 0.52 --no-targets-physical
 ```
+
+**量纲说明**：`datagnn.csv` / `ys.pt` / `fs.pt` 中的 YS、FS 经 **列均值归一化**（`YS_out = YS_raw / mean(YS)`），不是 log。物理量 → 模型量纲的公式见 [`preprocess/PREPROCESS_datagnn.md`](../preprocess/PREPROCESS_datagnn.md) §3.4。
 
 ## 默认参数
 
