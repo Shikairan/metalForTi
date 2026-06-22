@@ -129,9 +129,8 @@ def _resolve_targets(
     fs: torch.Tensor,
     *,
     targets_physical: bool,
-    fs_input_scale: str,
 ):
-    """原始目标 → 模型量纲 + data1123 标准物理量。"""
+    """data1123 原始目标 → 模型量纲 + 物理量。"""
     ys_mean, fs_mean = label_means_from_arrays(ys.cpu().numpy(), fs.cpu().numpy())
     resolved = resolve_user_targets(
         target_ys,
@@ -139,7 +138,6 @@ def _resolve_targets(
         ys_mean,
         fs_mean,
         targets_physical=targets_physical,
-        fs_input_scale=fs_input_scale,
     )
     return (
         resolved.ys_model,
@@ -148,7 +146,6 @@ def _resolve_targets(
         resolved.fs_data1123,
         resolved.ys_mean,
         resolved.fs_mean,
-        resolved,
     )
 
 
@@ -169,18 +166,12 @@ def _parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parents[1]
     p = argparse.ArgumentParser(description="NSGA-II 帕累托遗传逆设计")
     p.add_argument("--target-ys", type=float, required=True, help="目标 YS（与 data1123.csv 同量纲，MPa）")
-    p.add_argument("--target-fs", type=float, required=True, help="目标 FS（与 data1123.csv 同量纲，如 0.147）")
+    p.add_argument("--target-fs", type=float, required=True, help="目标 FS（与 data1123.csv 的 FS 列同量纲）")
     p.add_argument(
         "--targets-physical",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="target-ys/fs 为 data1123 原始量纲，自动换算为模型量纲（默认开启；--no-targets-physical 表示已是 ys.pt/fs.pt 量纲）",
-    )
-    p.add_argument(
-        "--fs-input-scale",
-        choices=("auto", "data1123", "dataori2"),
-        default="auto",
-        help="FS 输入量纲：auto 时 ≥1 视为 dataOri2（如 20），<1 视为 data1123（如 0.2）",
     )
     p.add_argument("--data-dir", type=Path, default=root / "gnnDir" / "gnndataPT" / "r-gatPT")
     p.add_argument(
@@ -269,14 +260,12 @@ def main() -> None:
         target_fs_phys,
         ys_mean,
         fs_mean,
-        resolved_targets,
     ) = _resolve_targets(
         args.target_ys,
         args.target_fs,
         ys,
         fs,
         targets_physical=targets_physical,
-        fs_input_scale=args.fs_input_scale,
     )
     te_mean, te_std = load_testenv_stats_np(_resolve_testenv_stats_path(args.data_dir, root))
     restore = OutputRestoreContext(
@@ -288,14 +277,8 @@ def main() -> None:
         target_fs_physical=target_fs_phys,
     )
     if targets_physical:
-        if resolved_targets.fs_input_scale == "dataori2" and resolved_targets.fs_input_raw >= 1.0:
-            logger.info(
-                "FS 输入 %.4f 识别为 dataOri2 量纲 → 标准输出 FS=%.6f（data1123）",
-                resolved_targets.fs_input_raw,
-                target_fs_phys,
-            )
         logger.info(
-            "目标（标准 data1123）YS=%.4f FS=%.6f → 模型量纲 YS=%.6f FS=%.6f "
+            "目标（data1123）YS=%.4f FS=%.6f → 模型量纲 YS=%.6f FS=%.6f "
             "(全表均值 YS=%.4f FS_dataOri2=%.4f)",
             target_ys_phys,
             target_fs_phys,

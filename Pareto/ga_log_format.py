@@ -125,7 +125,7 @@ def _format_one_solution(
     f2 = abs(fs_pred - restore.target_fs_physical)
     tgt_ys = restore.target_ys_physical
     tgt_fs = restore.target_fs_physical
-    unit_note = "标准 data1123"
+    unit_note = "data1123"
 
     lines = [f"  【{section_title}】"]
     if same_as_note:
