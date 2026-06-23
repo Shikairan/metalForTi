@@ -34,7 +34,9 @@ from Pareto.ga_nsga2 import (
     pareto_representative,
     tournament_select,
 )
+from Pareto.ga_breeding import make_offspring_expanded
 from Pareto.ga_compile import compile_genome
+from Pareto.ga_virtual_log import append_generation_virtual_log
 from Pareto.ga_operators import GAConfig, crossover_and_mutate
 from Pareto.ga_testenv_lock import FixedTestenvContext, resolve_fixed_testenv
 from Pareto.ga_report import (
@@ -218,6 +220,13 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="固定应变速率 sr（data1123 量纲）；须与 --fixed-tem 同时提供",
     )
+    p.add_argument(
+        "--breeder-pool",
+        choices=["population", "expanded"],
+        default="population",
+        help="population: 标准二元锦标赛选父（默认）；"
+        "expanded: 拓展育种池 + 随机移民（代 1 起生效）",
+    )
     p.add_argument("--force-cpu", action="store_true")
     return p.parse_args()
 
@@ -390,6 +399,15 @@ def main() -> None:
     n_orig = archive.num_original()
     original_parents = _entries_to_individuals(archive.original_entries(), evaluator)
     population: List[Individual] = []
+    use_expanded_breeder = args.breeder_pool == "expanded"
+    virtual_log_path = args.out_dir / "virtual_nodes_log.jsonl"
+    if use_expanded_breeder:
+        logger.info(
+            "拓展育种已开启（--breeder-pool expanded）："
+            "锦标赛 + 拓展池随机配对 + 移民；虚拟节点日志 → %s",
+            virtual_log_path.resolve(),
+        )
+        virtual_log_path.write_text("", encoding="utf-8")
 
     logger.info(
         "基因库已初始化：%d 原始节点 | 种群规模 %d | 目标 %s",
@@ -410,22 +428,85 @@ def main() -> None:
 
     for gen in range(1, args.generations + 1):
         parent_pool = original_parents if not population else population
-        pool_label = "604 原始（标签）" if not population else f"种群 {len(population)}"
-        logger.info("代 %d 父本: %s | 二元锦标赛选父", gen, pool_label)
+        if use_expanded_breeder:
+            pool_label = "604 原始（标签）" if not population else f"种群 {len(population)}"
+            logger.info("代 %d 父本: %s | 拓展育种（锦标赛+随机配对+移民）", gen, pool_label)
+            plan = make_offspring_expanded(
+                parent_pool,
+                archive,
+                args.pop_size,
+                x_train,
+                bounds,
+                projector,
+                rng,
+                ga_cfg,
+                fixed_testenv=fixed_testenv,
+            )
+            children_genomes = plan.genomes
+            logger.info(
+                "代 %d 子代构成：锦标赛 %d | 拓展池随机 %d | 移民 %d | 育种池 %d",
+                gen,
+                plan.n_tournament,
+                plan.n_random_mate,
+                plan.n_immigrant,
+                plan.breeder_pool_size,
+            )
+        else:
+            pool_label = "604 原始（标签）" if not population else f"种群 {len(population)}"
+            logger.info("代 %d 父本: %s | 二元锦标赛选父", gen, pool_label)
+            children_genomes = _make_offspring(
+                parent_pool,
+                args.pop_size,
+                x_train,
+                bounds,
+                projector,
+                rng,
+                ga_cfg,
+                fixed_testenv=fixed_testenv,
+            )
+            plan = None
 
-        children_genomes = _make_offspring(
-            parent_pool,
-            args.pop_size,
-            x_train,
-            bounds,
-            projector,
-            rng,
-            ga_cfg,
-            fixed_testenv=fixed_testenv,
-        )
         offspring = _evaluate_offspring(children_genomes, evaluator)
-        fitness_list: List[FitnessResult] = [ind.fitness for ind in offspring if ind.fitness is not None]
-        archive.add_virtual_batch(children_genomes, fitness_list, generation=gen)
+        fitness_list: List[FitnessResult] = [
+            ind.fitness for ind in offspring if ind.fitness is not None
+        ]
+        if use_expanded_breeder and plan is not None:
+            new_entries = archive.add_virtual_batch(
+                children_genomes,
+                fitness_list,
+                generation=gen,
+                is_immigrant=plan.is_immigrant,
+                offspring_kinds=plan.offspring_kinds,
+                immigrant_sources=plan.immigrant_sources,
+            )
+            imm_counts: dict[str, int] = {}
+            for src in plan.immigrant_sources:
+                if src:
+                    imm_counts[src] = imm_counts.get(src, 0) + 1
+            append_generation_virtual_log(
+                virtual_log_path,
+                gen,
+                new_entries,
+                restore,
+                breeding_summary={
+                    "n_new_virtual": len(new_entries),
+                    "n_tournament": plan.n_tournament,
+                    "n_random_mate": plan.n_random_mate,
+                    "n_immigrant": plan.n_immigrant,
+                    "n_immigrant_original": imm_counts.get("original", 0),
+                    "n_immigrant_virtual": imm_counts.get("virtual", 0),
+                    "n_immigrant_train": imm_counts.get("train", 0),
+                    "breeder_pool_size": plan.breeder_pool_size,
+                },
+            )
+            logger.info(
+                "代 %d 新增虚拟节点 %d 条已写入 %s",
+                gen,
+                len(new_entries),
+                virtual_log_path.name,
+            )
+        else:
+            archive.add_virtual_batch(children_genomes, fitness_list, generation=gen)
 
         if not population:
             population = environmental_selection(offspring, args.pop_size)
@@ -464,6 +545,8 @@ def main() -> None:
         "summary_txt": str((args.out_dir / "ga_summary.txt").resolve()),
         "scatter_png": str((args.out_dir / "pareto_scatter.png").resolve()),
     }
+    if use_expanded_breeder:
+        paths["virtual_nodes_log"] = str(virtual_log_path.resolve())
     summary = build_archive_summary(
         archive,
         front,
@@ -479,8 +562,9 @@ def main() -> None:
         generations=args.generations,
         device=device,
         paths=paths,
-        selection_method="NSGA-II",
+        selection_method="NSGA-II + expanded breeder" if use_expanded_breeder else "NSGA-II",
         fixed_testenv=fixed_testenv.to_summary_dict() if fixed_testenv else None,
+        breeder_pool=args.breeder_pool,
     )
     write_pareto_json(args.out_dir / "pareto_front.json", summary)
     write_ga_summary_txt(args.out_dir / "ga_summary.txt", summary)

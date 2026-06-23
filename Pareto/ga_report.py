@@ -77,7 +77,8 @@ FIELD_DESCRIPTIONS_CN: Dict[str, str] = {
     "pareto_representative": "最终种群帕累托代表（拥挤距离最大）",
     "best_virtual": "基因库历史最优虚拟个体（加权分 f1+f2+0.1*f3 最小）",
     "fixed_testenv": "用户锁定的试验环境（data1123 tem/sr）；省略表示 testenv 参与遗传",
-    "gene_source": "基因来源（原始/杂交虚拟）",
+    "breeder_pool": "父本策略：population 或 expanded",
+    "gene_source": "基因来源（原始/杂交虚拟/移民）",
     "field_descriptions": "字段中文说明",
 }
 
@@ -183,6 +184,7 @@ def build_archive_summary(
     label_means: Optional[Dict[str, float]] = None,
     restore: Optional[OutputRestoreContext] = None,
     fixed_testenv: Optional[Dict[str, Any]] = None,
+    breeder_pool: str = "population",
 ) -> Dict[str, Any]:
     """从最终种群帕累托前沿构建报告。"""
     if restore is None:
@@ -228,6 +230,7 @@ def build_archive_summary(
         "pareto_representative": rep_dict,
         "best_virtual": best_virtual_dict,
         "fixed_testenv": fixed_testenv,
+        "breeder_pool": breeder_pool,
         "pareto_front_size": len(individuals),
         "knee_index": knee,
         "individuals": individuals,
