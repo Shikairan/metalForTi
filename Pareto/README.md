@@ -70,6 +70,17 @@ python -m Pareto.run_ga_design --target-ys 1014.8 --target-fs 0.147 \
 
 省略 `--fixed-tem/--fixed-sr` 时，30 维全部参与遗传（默认）。
 
+**拓展育种**（默认关闭，显式开启）：
+
+```bash
+# 拓展父本池 + 随机移民（代 1 起）；子代构成默认 72% 锦标赛 / 18% 随机配对 / 10% 移民
+python -m Pareto.run_ga_design --target-ys 1014.8 --target-fs 0.147 \
+  --breeder-pool expanded
+```
+
+- 每代新增虚拟节点写入 `outputs_ga/virtual_nodes_log.jsonl`（含 `offspring_kind`、`is_immigrant`、适应度与 30 维基因组）
+- 虚拟进育种池：50% 加权 top + 50% 随机（每代最多 200 条虚拟抽样）
+
 CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 
 完整 150 代约 **604×150 = 90600** 次 GNN forward（仅子代）。
@@ -110,4 +121,5 @@ python -m Pareto.test_pareto_label_means
 python -m Pareto.test_pareto_target_scale
 python -m Pareto.test_pareto_objective_shortfall
 python -m Pareto.test_pareto_fixed_testenv
+python -m Pareto.test_pareto_breeding
 ```

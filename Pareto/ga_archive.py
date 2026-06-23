@@ -28,6 +28,9 @@ class ArchiveEntry:
     is_original: bool
     source_node_id: Optional[int] = None
     virtual_id: Optional[int] = None
+    is_immigrant: bool = False
+    offspring_kind: str = "tournament"
+    immigrant_source: Optional[str] = None
 
     def source_label(self) -> str:
         """人类可读的基因来源说明。"""
@@ -35,6 +38,11 @@ class ArchiveEntry:
             node = self.source_node_id if self.source_node_id is not None else "?"
             return f"604 原始基因（图节点 #{node}）"
         vid = self.virtual_id if self.virtual_id is not None else "?"
+        if self.is_immigrant:
+            src = self.immigrant_source or "?"
+            return f"随机移民（第 {self.generation} 代，虚拟 #{vid}，来源 {src}）"
+        if self.offspring_kind == "random_mate":
+            return f"拓展池随机配对（第 {self.generation} 代，虚拟 #{vid}）"
         return f"杂交虚拟基因（第 {self.generation} 代，虚拟 #{vid}）"
 
 
@@ -90,20 +98,41 @@ class GeneArchive:
         genomes: List[torch.Tensor],
         fitness_list: List[FitnessResult],
         generation: int,
-    ) -> None:
+        *,
+        is_immigrant: Optional[List[bool]] = None,
+        offspring_kinds: Optional[List[str]] = None,
+        immigrant_sources: Optional[List[Optional[str]]] = None,
+    ) -> List[ArchiveEntry]:
         if len(genomes) != len(fitness_list):
             raise ValueError("genomes 与 fitness_list 长度不一致")
-        for genome, fit in zip(genomes, fitness_list):
-            self._entries.append(
-                ArchiveEntry(
-                    genome=genome.clone(),
-                    fitness=fit,
-                    generation=generation,
-                    is_original=False,
-                    virtual_id=self._next_virtual_id,
-                )
+        n = len(genomes)
+        if is_immigrant is None:
+            is_immigrant = [False] * n
+        if offspring_kinds is None:
+            offspring_kinds = ["tournament"] * n
+        if immigrant_sources is None:
+            immigrant_sources = [None] * n
+        if not (len(is_immigrant) == len(offspring_kinds) == len(immigrant_sources) == n):
+            raise ValueError("虚拟批次元数据长度与 genomes 不一致")
+
+        added: List[ArchiveEntry] = []
+        for genome, fit, imm, kind, src in zip(
+            genomes, fitness_list, is_immigrant, offspring_kinds, immigrant_sources
+        ):
+            entry = ArchiveEntry(
+                genome=genome.clone(),
+                fitness=fit,
+                generation=generation,
+                is_original=False,
+                virtual_id=self._next_virtual_id,
+                is_immigrant=bool(imm),
+                offspring_kind=str(kind),
+                immigrant_source=src,
             )
+            self._entries.append(entry)
+            added.append(entry)
             self._next_virtual_id += 1
+        return added
 
     def best_entry(self) -> Optional[ArchiveEntry]:
         if not self._entries:
