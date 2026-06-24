@@ -17,7 +17,7 @@
 | [`gnn/r-gnn/`](gnn/r-gnn/) | R-GCN 训练 |
 | [`gnndataPT/checkpython/checkval.py`](gnndataPT/checkpython/checkval.py) | 对照 CSV 查看 `val_mask` 对应样本（调试用） |
 
-依赖：`torch`、`torch_geometric`、`pandas`、`numpy`；`build_datagnn.py` 还依赖 [`pt_dataset.py`](../pt_dataset.py)（须位于**仓库根目录**，与 `gnnDir/` 同级；若仅有本目录，请从主仓库复制该文件到根目录或加入 `PYTHONPATH`）。
+依赖：`torch`、`torch_geometric`、`pandas`、`numpy`。`build_datagnn.py` 的 coldway 与 [`preprocess/preprocess_datagnn_repro.py`](../preprocess/preprocess_datagnn_repro.py) 一致（**不再**使用已废弃的 `pt_dataset.py`）。
 
 ---
 
@@ -25,9 +25,9 @@
 
 「数据集」在此流水线中指 **参与构图与训练的样本行**。筛选发生在 **原始 CSV** 阶段最有效。
 
-### 1. 原始输入：`dataOri.csv`
+### 1. 原始输入：`dataOri2.csv`
 
-[`build_datagnn.py`](build_datagnn.py) 默认读取 **`symtest/dataOri.csv`**（可用 `--input` 指定其它文件）。
+[`build_datagnn.py`](build_datagnn.py) 默认读取 **[`preprocess/dataOri2.csv`](../preprocess/dataOri2.csv)**（可用 `--input` 指定其它文件）。
 
 原始表须包含下列列（名称固定）：
 
@@ -41,8 +41,21 @@
 ### 2. 生成建模用表：`datagnn.csv`
 
 ```bash
-cd symbolTransformer/symtest/gnnDir
-python build_datagnn.py --input /path/to/your_filtered_dataOri.csv --output datacsv/datagnn.csv
+# 在仓库根目录
+python gnnDir/build_datagnn.py \
+  --input preprocess/dataOri2.csv \
+  --output gnnDir/datacsv/datagnn.csv
+```
+
+等价复现/校验也可用：
+
+```bash
+python -m preprocess.preprocess_datagnn_repro forward \
+  --input preprocess/dataOri2.csv \
+  --output gnnDir/datacsv/datagnn.csv
+python -m preprocess.preprocess_datagnn_repro verify \
+  --input preprocess/dataOri2.csv \
+  --reference gnnDir/datacsv/datagnn.csv
 ```
 
 输出：
@@ -107,13 +120,16 @@ python gen_masks.py --mode index --num-nodes 604 \
 
 ## 二、如何生成 PT 数据包
 
-推荐一键脚本（从 `dataOri` 重算 `datagnn.csv` 并写入 `gnndataPT/...`）：
+推荐一键脚本（从 `dataOri2` 重算 `datagnn.csv` 并写入 `gnndataPT/...`）：
 
 ```bash
-cd symbolTransformer/symtest/gnnDir
+# 在 gnnDir 目录或仓库根目录（以下路径相对 gnnDir）
+cd gnnDir
 
 # RGAT 使用目录 gnndataPT/r-gatPT
-python regenerate_rgnnpt.py --pt-bundle rgat --dataori ../dataOri.csv --datagnn-csv datacsv/datagnn.csv
+python regenerate_rgnnpt.py --pt-bundle rgat \
+  --dataori ../preprocess/dataOri2.csv \
+  --datagnn-csv datacsv/datagnn.csv
 
 # R-GCN 使用 gnndataPT/r-gnnPT
 python regenerate_rgnnpt.py --pt-bundle rgnn
@@ -143,7 +159,7 @@ python regenerate_rgnnpt.py --pt-bundle rgnn
 **单次训练（保存最优 checkpoint）：**
 
 ```bash
-cd symbolTransformer/symtest/gnnDir/gnn/r-gatDouble
+cd gnnDir/gnn/r-gatDouble
 python train_fs_gat.py \
   --data-dir ../../gnndataPT/r-gatPT \
   --epochs 1000 \
@@ -176,7 +192,7 @@ python loop_train_swap_rgat.py \
 目录：[gnn/r-gnn/](gnn/r-gnn/)
 
 ```bash
-cd symbolTransformer/symtest/gnnDir/gnn/r-gnn
+cd gnnDir/gnn/r-gnn
 python train_fs_rgcn.py --data-dir ../../gnndataPT/r-gnnPT --out-dir ./runs ...
 ```
 
@@ -196,7 +212,7 @@ python train_fs_rgcn.py --data-dir ../../gnndataPT/r-gnnPT --out-dir ./runs ...
 ```mermaid
 flowchart LR
   subgraph filter [筛选样本]
-    O[dataOri.csv 筛选行]
+    O[dataOri2.csv 筛选行]
   end
   subgraph feat [特征]
     B[build_datagnn.py]
@@ -225,4 +241,5 @@ flowchart LR
 3. **只想换划分、不换图结构**  
    可在同一 `datagnn.csv` 上改 `--train-ratio` / `--split-seed`，或用手写 `train_mask.pt`/`val_mask.pt` 再跑 `rgcn_dataloader.py`（不必改相似度阈值）。
 
-更多推理侧说明（读 checkpoint、自动建边）见仓库内 `symwithgnn/gnn/README.md`（若已同步）。
+4. **全量 604 训练（Pareto 默认权重）**  
+   见仓库根目录 [modelAll/README.md](../modelAll/README.md)，与 r-gatDouble 共用 `load_dual_rgat` 加载格式。
