@@ -5,7 +5,7 @@
 实现参考：
 
 - 正向管线：[`build_datagnn.py`](build_datagnn.py)
-- 冷加工核心：[`../pt_dataset.py`](../pt_dataset.py) 中 `_normalize_coldway_tx_cx`、`_coldway_row_to_seq_3x6`
+- 冷加工核心：[`preprocess/preprocess_datagnn_repro.py`](preprocess_datagnn_repro.py) 中 `normalize_coldway_tx_cx`、`coldway_row_to_seq_3x6`
 
 ---
 
@@ -562,7 +562,7 @@ python preprocess_datagnn_repro.py inverse \
 | 行数 | 604 |
 | element | 与输入 Al..Fe 完全一致 |
 | testenv | Z-score 后与 §2.1 常量一致 |
-| coldway | 与 `pt_dataset` 实现逐元素一致（见 verify） |
+| coldway | 与 `preprocess_datagnn_repro` 实现逐元素一致（见 verify） |
 | YS/FS | `YS_out = YS_raw / 965.7821034430465`（+eps） |
 | 逆变换 testenv | 误差 ≈ 0 |
 | 逆变换 YS/FS | 误差 < 1e-10 |
@@ -582,4 +582,4 @@ python preprocess_datagnn_repro.py inverse \
 
 ---
 
-*文档版本：与 `build_datagnn.py`、`pt_dataset.py` 当前实现及 `dataOri2.csv`（604 行）统计量对齐。*
+*文档版本：与 `build_datagnn.py`、`preprocess_datagnn_repro.py` 当前实现及 `dataOri2.csv`（604 行）统计量对齐。*

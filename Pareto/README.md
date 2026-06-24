@@ -42,6 +42,9 @@ python -m Pareto.run_ga_design --target-ys 1201 --target-fs 0.2
 
 | 参数 | 默认 |
 |------|------|
+| `--data-dir` | `gnnDir/gnndataPT/r-gatPT` |
+| `--ckpt` | `modelAll/runs/best_rgat_full.pt` |
+| `--rgat-dir` | `modelAll` |
 | `--pop-size` | `604`（种群 / 每代子代数） |
 | `--generations` | `150` |
 | `--objectives` | `three`（默认，f1+f2+f3 三目标）/ `two`（仅 f1+f2，关闭 f3） |
@@ -88,8 +91,9 @@ CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 ## 输出
 
 - `Pareto/outputs_ga/pareto_front.json` — 最终种群第一非支配层（**数值已还原为 data1123 物理量纲**）
-- `Pareto/outputs_ga/ga_summary.txt` — 文本摘要（同上）
+- `Pareto/outputs_ga/ga_summary.txt` — 文本摘要（含种群帕累托代表、基因库最优虚拟个体）
 - `Pareto/outputs_ga/pareto_scatter.png` — f1/f2 散点（物理量纲欠达标）
+- `Pareto/outputs_ga/virtual_nodes_log.jsonl` — **仅 `--breeder-pool expanded`**：每代新增虚拟节点调研日志
 
 ### 输出字段（物理量纲，30 维结构不变）
 
@@ -108,7 +112,7 @@ CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 
 每代日志中 coldway 各阶段**统一显示物理量 `T`、`t`**（不再对方式 2/3 误标为 C_a/C_b），数值固定 4 位小数。
 
-每代日志展示：**当前种群帕累托代表** + **前沿个体数**。
+每代日志展示：**种群帕累托代表**、**基因库最优虚拟个体**（若有）与前沿规模。
 
 ## 自检
 
