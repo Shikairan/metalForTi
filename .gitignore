@@ -1,1 +1,15 @@
 __pycache__/
+**/__pycache__/
+
+# 模型权重与图数据（本地保留，不上传）
+*.pt
+
+# modelAll 训练产物目录
+modelAll/**/data/
+modelAll/**/runs/
+
+# 历史 mask / 训练日志
+**/mask_round_history/
+**/runs/train_log.csv
+**/runs/train_stdout.log
+**/runs/best_*.pt
