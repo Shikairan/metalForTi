@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-从 gnnDir/datagnn.csv 构建全量图数据，train:val = 1:0.2，输出到 modelAll/data/。
+从 gnnDir/datagnn.csv 构建全量图数据，train:val = 1:0.2，输出到 modelAll/ysFs/data/。
+标签：YS + FS。
 """
 
 from __future__ import annotations
@@ -12,7 +13,8 @@ from pathlib import Path
 import torch
 
 _ROOT = Path(__file__).resolve().parent
-_GNN_DIR = _ROOT.parent / "gnnDir"
+_METAL_ROOT = _ROOT.parent.parent
+_GNN_DIR = _METAL_ROOT / "gnnDir"
 if str(_GNN_DIR) not in sys.path:
     sys.path.insert(0, str(_GNN_DIR))
 
@@ -24,7 +26,7 @@ TRAIN_RATIO = TRAIN_PART / (TRAIN_PART + VAL_PART)
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="modelAll 全量 RGAT 数据构建（1:0.2 划分）")
+    p = argparse.ArgumentParser(description="modelAll/ysFs 全量 RGAT 数据构建（YS+FS，1:0.2 划分）")
     p.add_argument(
         "--csv",
         type=Path,

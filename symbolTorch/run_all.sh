@@ -4,7 +4,7 @@ set -uo pipefail
 
 PY="${PYTHON:-/root/miniconda3/envs/metal/bin/python}"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-CKPT="${CKPT:-$ROOT/../modelAll/runs/best_rgat_full.pt}"
+CKPT="${CKPT:-$ROOT/../modelAll/ysFs/runs/best_rgat_full.pt}"
 EXTRA=("$@")
 
 echo "=== 清理旧结果 ==="

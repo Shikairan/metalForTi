@@ -39,9 +39,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--ckpt",
         type=Path,
-        default=root / "modelAll" / "runs" / "best_rgat_full.pt",
+        default=root / "modelAll" / "ysFs" / "runs" / "best_rgat_full.pt",
     )
-    p.add_argument("--rgat-dir", type=Path, default=root / "modelAll")
+    p.add_argument("--rgat-dir", type=Path, default=root / "modelAll" / "ysFs")
     p.add_argument("--out-dir", type=Path, default=root / "Pareto" / "testnode" / "outputs")
     p.add_argument("--num-offspring", type=int, default=604)
     p.add_argument("--virtual-pool-size", type=int, default=604)

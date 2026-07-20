@@ -13,6 +13,8 @@ import numpy as np
 ELEMENT_COLS = ["Al", "Zr", "Sn", "Mo", "Cr", "Nb", "Si", "V", "Ta", "Fe"]
 TESTENV_COLS = ["tem", "fcr"]
 TARGET_COLS = ["YS", "FS"]
+# datagnnUts.csv：在原 YS/FS 基础上追加 UTS（33 列标签尾）
+TARGET_COLS_UTS = ["YS", "FS", "UTS"]
 COLDWAY_COLS = [
     "T1", "t1", "T2", "t2", "T3", "t3",
     "C1_1", "C1_2", "C1_3", "C2_1", "C2_2", "C2_3", "C3_1", "C3_2", "C3_3",
@@ -24,8 +26,10 @@ DEFAULT_TESTENV_MEAN = np.array([194.7433774834437, 1342.7152317880796], dtype=n
 DEFAULT_TESTENV_STD = np.array([214.62536752046483, 1547.0319516107018], dtype=np.float64)
 DEFAULT_YS_MEAN = 965.7821034430465
 DEFAULT_FS_MEAN = 28.120464644701983
+# dataOri2.csv / data1123.csv 全表 UTS 算术平均（604 行）
+DEFAULT_UTS_MEAN = 1291.9939771048014
 
-# data1123.csv → dataOri2.csv：FS 额外乘以 100（YS 两级相同）
+# data1123.csv → dataOri2.csv：FS 额外乘以 100（YS/UTS 两级相同，无额外缩放）
 FS_DATA1123_TO_DATAORI2_SCALE = 100.0
 
 
@@ -96,6 +100,65 @@ def denormalize_targets_to_data1123(
     return ys_phys, fs_dataori2_to_data1123(fs_dataori2)
 
 
+def normalize_uts_physical(
+    uts_physical: float,
+    fs_physical: float,
+    *,
+    uts_mean: float = DEFAULT_UTS_MEAN,
+    fs_mean: float = DEFAULT_FS_MEAN,
+    eps: float = EPS,
+) -> Tuple[float, float]:
+    """dataOri2 量纲 UTS/FS → 模型量纲（列均值归一化，与 YS 相同）。"""
+    return (
+        float(uts_physical) / (float(uts_mean) + eps),
+        float(fs_physical) / (float(fs_mean) + eps),
+    )
+
+
+def normalize_uts_from_data1123(
+    uts_physical: float,
+    fs_data1123: float,
+    *,
+    uts_mean: float = DEFAULT_UTS_MEAN,
+    fs_mean: float = DEFAULT_FS_MEAN,
+    eps: float = EPS,
+) -> Tuple[float, float]:
+    """data1123 原始 UTS/FS → 模型量纲（UTS 无额外缩放；FS 先 ×100 再除以全表 FS 均值）。"""
+    uts_model = float(uts_physical) / (float(uts_mean) + eps)
+    fs_model = fs_data1123_to_dataori2(fs_data1123) / (float(fs_mean) + eps)
+    return uts_model, fs_model
+
+
+def denormalize_uts_model(
+    uts_model: float,
+    fs_model: float,
+    *,
+    uts_mean: float = DEFAULT_UTS_MEAN,
+    fs_mean: float = DEFAULT_FS_MEAN,
+    eps: float = EPS,
+) -> Tuple[float, float]:
+    """模型量纲 → dataOri2 物理量 UTS/FS。"""
+    return (
+        float(uts_model) * (float(uts_mean) + eps),
+        float(fs_model) * (float(fs_mean) + eps),
+    )
+
+
+def denormalize_uts_to_data1123(
+    uts_model: float,
+    fs_model: float,
+    *,
+    uts_mean: float = DEFAULT_UTS_MEAN,
+    fs_mean: float = DEFAULT_FS_MEAN,
+    eps: float = EPS,
+) -> Tuple[float, float]:
+    """模型量纲 → data1123 原始 UTS/FS。"""
+    uts_phys, fs_dataori2 = denormalize_uts_model(
+        uts_model, fs_model, uts_mean=uts_mean, fs_mean=fs_mean, eps=eps
+    )
+    return uts_phys, fs_dataori2_to_data1123(fs_dataori2)
+
+
 def label_means_from_arrays(ys, fs) -> Tuple[float, float]:
     """已归一化标签张量（ys.pt/fs.pt）的算术均值；**不可**用于物理量逆变换。"""
     y = np.asarray(ys, dtype=np.float64)
@@ -126,6 +189,40 @@ def physical_label_means_for_targets(
             fs_mean_dataori2 = float(np.mean(fs_vals)) * FS_DATA1123_TO_DATAORI2_SCALE
             return ys_mean, fs_mean_dataori2
     return DEFAULT_YS_MEAN, DEFAULT_FS_MEAN
+
+
+def physical_label_means_for_uts(
+    data_path: Path | None = None,
+) -> Tuple[float, float, float]:
+    """
+    全表物理 YS/FS/UTS 均值，用于 data1123/dataOri2 ↔ 模型量纲换算。
+
+    返回 (mean_YS_MPa, mean_FS_dataOri2, mean_UTS_MPa)。
+    若 data_path 为 data1123（FS 为小数刻度），FS 均值会 ×100；
+    若为 dataOri2，直接取列均值。
+    """
+    if data_path is not None and data_path.is_file():
+        ys_vals: list[float] = []
+        fs_vals: list[float] = []
+        uts_vals: list[float] = []
+        with data_path.open("r", newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames or []
+            is_data1123 = "sr" in fieldnames and "fcr" not in fieldnames
+            for row in reader:
+                if not row:
+                    continue
+                ys_vals.append(float(row["YS"]))
+                fs_vals.append(float(row["FS"]))
+                uts_vals.append(float(row["UTS"]))
+        if ys_vals:
+            ys_mean = float(np.mean(ys_vals))
+            fs_mean = float(np.mean(fs_vals))
+            uts_mean = float(np.mean(uts_vals))
+            if is_data1123:
+                fs_mean *= FS_DATA1123_TO_DATAORI2_SCALE
+            return ys_mean, fs_mean, uts_mean
+    return DEFAULT_YS_MEAN, DEFAULT_FS_MEAN, DEFAULT_UTS_MEAN
 
 
 @dataclass(frozen=True)
@@ -297,17 +394,59 @@ def coldway_seq_to_raw_15(flat18: np.ndarray) -> np.ndarray:
     return raw
 
 
+def _testenv_cols_from_fieldnames(fieldnames: list[str] | None) -> list[str]:
+    """dataOri2 用 tem/fcr；data1123 用 tem/sr。"""
+    names = fieldnames or []
+    if "fcr" in names:
+        return ["tem", "fcr"]
+    if "sr" in names:
+        return ["tem", "sr"]
+    return list(TESTENV_COLS)
+
+
 def read_dataori(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     with path.open("r", newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
+        te_cols = _testenv_cols_from_fieldnames(list(reader.fieldnames or []))
         el, te, cw, tg = [], [], [], []
         for r in reader:
             if not r:
                 continue
             el.append([float(r[c]) for c in ELEMENT_COLS])
-            te.append([float(r[c]) for c in TESTENV_COLS])
+            te.append([float(r[c]) for c in te_cols])
             cw.append([float(r[c]) for c in COLDWAY_COLS])
             tg.append([float(r[c]) for c in TARGET_COLS])
+    return (
+        np.asarray(el, dtype=np.float32),
+        np.asarray(te, dtype=np.float32),
+        np.asarray(cw, dtype=np.float32),
+        np.asarray(tg, dtype=np.float32),
+    )
+
+
+def read_dataori_uts(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """读取 YS/FS/UTS 三标签（dataOri2 或 data1123）。data1123 的 FS 会 ×100 对齐 dataOri2。"""
+    with path.open("r", newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        fieldnames = list(reader.fieldnames or [])
+        te_cols = _testenv_cols_from_fieldnames(fieldnames)
+        is_data1123 = "sr" in fieldnames and "fcr" not in fieldnames
+        missing = [c for c in (ELEMENT_COLS + COLDWAY_COLS + TARGET_COLS_UTS) if c not in fieldnames]
+        if missing:
+            raise ValueError(f"Missing columns in {path}: {missing}")
+        el, te, cw, tg = [], [], [], []
+        for r in reader:
+            if not r:
+                continue
+            el.append([float(r[c]) for c in ELEMENT_COLS])
+            te.append([float(r[c]) for c in te_cols])
+            cw.append([float(r[c]) for c in COLDWAY_COLS])
+            ys = float(r["YS"])
+            fs = float(r["FS"])
+            uts = float(r["UTS"])
+            if is_data1123:
+                fs = fs_data1123_to_dataori2(fs)
+            tg.append([ys, fs, uts])
     return (
         np.asarray(el, dtype=np.float32),
         np.asarray(te, dtype=np.float32),
@@ -336,9 +475,33 @@ def forward_preprocess(
         coldway_out[i] = coldway_row_to_seq_3x6(coldway_raw[i], scaled_all[i])
     targets_out = targets.astype(np.float32, copy=True)
     if normalize_targets:
-        targets_out[:, 0] /= np.float32(targets[:, 0].mean() + EPS)
-        targets_out[:, 1] /= np.float32(targets[:, 1].mean() + EPS)
+        for j in range(targets_out.shape[1]):
+            targets_out[:, j] /= np.float32(targets[:, j].mean() + EPS)
     return element_out, testenv_out, coldway_out, targets_out
+
+
+def forward_preprocess_uts(
+    element: np.ndarray,
+    testenv: np.ndarray,
+    coldway_raw: np.ndarray,
+    targets: np.ndarray,
+    *,
+    te_mean: np.ndarray = DEFAULT_TESTENV_MEAN,
+    te_std: np.ndarray = DEFAULT_TESTENV_STD,
+    normalize_targets: bool = True,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """特征同 forward_preprocess；targets 形状 (N,3)=YS/FS/UTS，各自均值归一化。"""
+    if targets.ndim != 2 or targets.shape[1] != 3:
+        raise ValueError(f"UTS targets must be (N,3) YS/FS/UTS, got {getattr(targets, 'shape', None)}")
+    return forward_preprocess(
+        element,
+        testenv,
+        coldway_raw,
+        targets,
+        te_mean=te_mean,
+        te_std=te_std,
+        normalize_targets=normalize_targets,
+    )
 
 
 def inverse_preprocess(
@@ -364,6 +527,43 @@ def inverse_preprocess(
     return element.astype(np.float32, copy=False), testenv_raw, coldway_raw, targets_raw
 
 
+def inverse_preprocess_uts(
+    element: np.ndarray,
+    testenv_z: np.ndarray,
+    coldway_flat: np.ndarray,
+    targets_norm: np.ndarray,
+    *,
+    te_mean: np.ndarray = DEFAULT_TESTENV_MEAN,
+    te_std: np.ndarray = DEFAULT_TESTENV_STD,
+    ys_mean: float = DEFAULT_YS_MEAN,
+    fs_mean: float = DEFAULT_FS_MEAN,
+    uts_mean: float = DEFAULT_UTS_MEAN,
+    denormalize_targets: bool = True,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """还原 YS/FS/UTS 三标签（模型量纲 → dataOri2 物理量）。"""
+    if targets_norm.ndim != 2 or targets_norm.shape[1] != 3:
+        raise ValueError(
+            f"UTS targets must be (N,3) YS/FS/UTS, got {getattr(targets_norm, 'shape', None)}"
+        )
+    el, te, cw, _ = inverse_preprocess(
+        element,
+        testenv_z,
+        coldway_flat,
+        targets_norm[:, :2],
+        te_mean=te_mean,
+        te_std=te_std,
+        ys_mean=ys_mean,
+        fs_mean=fs_mean,
+        denormalize_targets=False,
+    )
+    targets_raw = targets_norm.astype(np.float32, copy=True)
+    if denormalize_targets:
+        targets_raw[:, 0] *= np.float32(ys_mean + EPS)
+        targets_raw[:, 1] *= np.float32(fs_mean + EPS)
+        targets_raw[:, 2] *= np.float32(uts_mean + EPS)
+    return el, te, cw, targets_raw
+
+
 def write_datagnn(
     path: Path,
     element: np.ndarray,
@@ -376,6 +576,35 @@ def write_datagnn(
         + [f"testenv_{i}" for i in range(2)]
         + [f"coldway_{i}" for i in range(18)]
         + ["YS", "FS"]
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        for i in range(element.shape[0]):
+            w.writerow(
+                element[i].tolist()
+                + testenv[i].tolist()
+                + coldway[i].tolist()
+                + targets[i].tolist()
+            )
+
+
+def write_datagnn_uts(
+    path: Path,
+    element: np.ndarray,
+    testenv: np.ndarray,
+    coldway: np.ndarray,
+    targets: np.ndarray,
+) -> None:
+    """写出 datagnnUts.csv：30 维特征 + YS + FS + UTS。"""
+    if targets.ndim != 2 or targets.shape[1] != 3:
+        raise ValueError(f"UTS targets must be (N,3) YS/FS/UTS, got {getattr(targets, 'shape', None)}")
+    header = (
+        [f"element_{i}" for i in range(10)]
+        + [f"testenv_{i}" for i in range(2)]
+        + [f"coldway_{i}" for i in range(18)]
+        + list(TARGET_COLS_UTS)
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
@@ -407,12 +636,41 @@ def read_datagnn(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.nda
     )
 
 
+def read_datagnn_uts(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    with path.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        el, te, cw, tg = [], [], [], []
+        for r in reader:
+            el.append([float(r[f"element_{i}"]) for i in range(10)])
+            te.append([float(r[f"testenv_{i}"]) for i in range(2)])
+            cw.append([float(r[f"coldway_{i}"]) for i in range(18)])
+            tg.append([float(r["YS"]), float(r["FS"]), float(r["UTS"])])
+    return (
+        np.asarray(el, dtype=np.float32),
+        np.asarray(te, dtype=np.float32),
+        np.asarray(cw, dtype=np.float32),
+        np.asarray(tg, dtype=np.float32),
+    )
+
+
+def _default_datagnn_uts_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "gnnDir" / "datacsv" / "datagnnUts.csv"
+
+
 def main() -> None:
-    p = argparse.ArgumentParser(description="dataOri2 <-> datagnn 预处理复现")
-    p.add_argument("mode", choices=["forward", "inverse", "verify"])
+    p = argparse.ArgumentParser(description="dataOri2 <-> datagnn / datagnnUts 预处理复现")
+    p.add_argument(
+        "mode",
+        choices=["forward", "inverse", "verify", "forward-uts", "inverse-uts", "verify-uts"],
+    )
     p.add_argument("--input", type=Path, required=True)
     p.add_argument("--output", type=Path, default=None)
-    p.add_argument("--reference", type=Path, default=None, help="verify 时与 datagnn.csv 对比")
+    p.add_argument(
+        "--reference",
+        type=Path,
+        default=None,
+        help="verify / verify-uts 时对比的参考 CSV",
+    )
     args = p.parse_args()
 
     if args.mode == "forward":
@@ -434,7 +692,7 @@ def main() -> None:
                 w.writerow(te[i].tolist() + el[i].tolist() + cw[i].tolist() + tg[i].tolist())
         print(f"[OK] inverse -> {out_path} rows={el.shape[0]}")
 
-    else:
+    elif args.mode == "verify":
         el, te, cw, tg = read_dataori(args.input)
         pred = forward_preprocess(el, te, cw, tg, normalize_targets=True)
         ref_path = args.reference or Path(__file__).parent / "datagnn.csv"
@@ -445,6 +703,53 @@ def main() -> None:
             m = np.allclose(a, b, rtol=1e-5, atol=1e-5, equal_nan=True)
             print(f"{name}: match={m}")
             ok = ok and m
+        print("ALL OK" if ok else "MISMATCH")
+        raise SystemExit(0 if ok else 1)
+
+    elif args.mode == "forward-uts":
+        el, te, cw, tg = read_dataori_uts(args.input)
+        out = forward_preprocess_uts(el, te, cw, tg, normalize_targets=True)
+        out_path = args.output or _default_datagnn_uts_path()
+        write_datagnn_uts(out_path, *out)
+        print(f"[OK] forward-uts -> {out_path} rows={el.shape[0]} cols=33 (YS,FS,UTS)")
+
+    elif args.mode == "inverse-uts":
+        el, te_z, cw_f, tg_n = read_datagnn_uts(args.input)
+        el, te, cw, tg = inverse_preprocess_uts(el, te_z, cw_f, tg_n)
+        out_path = args.output or args.input.parent / "dataOri_uts_restored.csv"
+        header = TESTENV_COLS + ELEMENT_COLS + COLDWAY_COLS + TARGET_COLS_UTS
+        with out_path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(header)
+            for i in range(el.shape[0]):
+                w.writerow(te[i].tolist() + el[i].tolist() + cw[i].tolist() + tg[i].tolist())
+        print(f"[OK] inverse-uts -> {out_path} rows={el.shape[0]}")
+
+    else:  # verify-uts
+        el, te, cw, tg = read_dataori_uts(args.input)
+        pred = forward_preprocess_uts(el, te, cw, tg, normalize_targets=True)
+        ref_ys_path = args.reference or (
+            Path(__file__).resolve().parents[1] / "gnnDir" / "datacsv" / "datagnn.csv"
+        )
+        ref_el, ref_te, ref_cw, ref_ysfs = read_datagnn(ref_ys_path)
+        ok = True
+        for name, a, b in (
+            ("element", pred[0], ref_el),
+            ("testenv", pred[1], ref_te),
+            ("coldway", pred[2], ref_cw),
+        ):
+            m = np.allclose(a, b, rtol=1e-5, atol=1e-5, equal_nan=True)
+            print(f"{name}: match_datagnn={m}")
+            ok = ok and m
+        ys_fs_match = np.allclose(pred[3][:, :2], ref_ysfs, rtol=1e-5, atol=1e-5, equal_nan=True)
+        print(f"YS_FS: match_datagnn={ys_fs_match}")
+        ok = ok and ys_fs_match
+        # UTS 列：与 DEFAULT_UTS_MEAN 归一化一致（相对全表均值）
+        uts_raw = tg[:, 2]
+        uts_expected = (uts_raw / np.float32(uts_raw.mean() + EPS)).astype(np.float32)
+        uts_match = np.allclose(pred[3][:, 2], uts_expected, rtol=1e-5, atol=1e-5)
+        print(f"UTS: match_mean_norm={uts_match}")
+        ok = ok and uts_match
         print("ALL OK" if ok else "MISMATCH")
         raise SystemExit(0 if ok else 1)
 

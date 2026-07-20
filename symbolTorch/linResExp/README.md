@@ -42,7 +42,7 @@ python3.13 run_distill.py --quick --device cuda
 --ridge-alpha 1.0      # Ridge 正则（默认 1.0）
 --sr-niterations 400   # PySR 迭代（完整跑）
 --include-val          # 蒸馏样本含验证集
---ckpt ../../modelAll/runs/best_rgat_full.pt
+--ckpt ../../modelAll/ysFs/runs/best_rgat_full.pt
 ```
 
 ---

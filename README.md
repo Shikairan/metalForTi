@@ -12,7 +12,7 @@
 |------|------|----------|
 | [`preprocess/`](preprocess/) | **data1123 / dataOri2 ↔ datagnn** 正向与逆变换（Pareto/grd 量纲） | [PREPROCESS_datagnn.md](preprocess/PREPROCESS_datagnn.md) |
 | [`gnnDir/`](gnnDir/) | 数据构建、异质图 PT、RGAT/R-GCN **训练** | [gnnDir/README.md](gnnDir/README.md) |
-| [`modelAll/`](modelAll/) | **全量 604 条** RGAT 训练与默认 checkpoint | [modelAll/README.md](modelAll/README.md) |
+| [`modelAll/`](modelAll/) | **全量 604 条** RGAT（`ysFs` YS+FS / `utsFs` UTS+FS） | [modelAll/README.md](modelAll/README.md) |
 | [`grd/`](grd/) | 冻结 GNN 下的 **全特征梯度反推** | [grd/README.md](grd/README.md) |
 | [`Pareto/`](Pareto/) | **NSGA-II 帕累托遗传逆设计**（目标 YS/FS → 30 维配方） | [Pareto/README.md](Pareto/README.md) |
 | [`symbolTorch/`](symbolTorch/) | GNN 蒸馏为 **可读符号公式**（SymTorch + PySR） | [symbolTorch/README.md](symbolTorch/README.md) |
@@ -102,7 +102,7 @@ export PYTHONPATH="$(pwd):${PYTHONPATH}"
 | 资源 | 默认路径 |
 |------|----------|
 | 图数据 PT | `gnnDir/gnndataPT/r-gatPT/` |
-| **Pareto / 推荐 checkpoint** | `modelAll/runs/best_rgat_full.pt` |
+| **Pareto / 推荐 checkpoint** | `modelAll/ysFs/runs/best_rgat_full.pt` |
 | 备选 checkpoint（r-gatDouble） | `gnnDir/gnn/r-gatDouble/runs/best_ysfs_gat.pt` |
 | 参考表 data1123 | `preprocess/data1123.csv` |
 
@@ -130,8 +130,8 @@ python -m Pareto.run_ga_design --target-ys 1014.8 --target-fs 0.147 \
 ```bash
 python -m grd.run_inversion \
   --data-dir gnnDir/gnndataPT/r-gatPT \
-  --ckpt modelAll/runs/best_rgat_full.pt \
-  --rgat-dir modelAll \
+  --ckpt modelAll/ysFs/runs/best_rgat_full.pt \
+  --rgat-dir modelAll/ysFs \
   --out-dir grd/outputs
 ```
 
@@ -144,8 +144,9 @@ python -m grd.run_inversion \
 **全量 604（推荐，与 Pareto 默认权重一致）：**
 
 ```bash
-python modelAll/build_data.py --sanity
-python modelAll/train.py
+python modelAll/ysFs/build_data.py --sanity
+python modelAll/ysFs/train.py
+# UTS+FS：见 modelAll/utsFs/README.md
 ```
 
 **gnnDir 原流程（r-gatDouble 等）：** 见 [gnnDir/README.md](gnnDir/README.md)、[modelAll/README.md](modelAll/README.md)。

@@ -242,4 +242,4 @@ flowchart LR
    可在同一 `datagnn.csv` 上改 `--train-ratio` / `--split-seed`，或用手写 `train_mask.pt`/`val_mask.pt` 再跑 `rgcn_dataloader.py`（不必改相似度阈值）。
 
 4. **全量 604 训练（Pareto 默认权重）**  
-   见仓库根目录 [modelAll/README.md](../modelAll/README.md)，与 r-gatDouble 共用 `load_dual_rgat` 加载格式。
+   见仓库根目录 [modelAll/README.md](../modelAll/README.md)（`ysFs` / `utsFs` 子目录），与 r-gatDouble 共用 `load_dual_rgat` 加载格式。

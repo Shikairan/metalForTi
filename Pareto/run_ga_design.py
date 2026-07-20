@@ -194,9 +194,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--ckpt",
         type=Path,
-        default=root / "modelAll" / "runs" / "best_rgat_full.pt",
+        default=root / "modelAll" / "ysFs" / "runs" / "best_rgat_full.pt",
     )
-    p.add_argument("--rgat-dir", type=Path, default=root / "modelAll")
+    p.add_argument("--rgat-dir", type=Path, default=root / "modelAll" / "ysFs")
     p.add_argument("--out-dir", type=Path, default=root / "Pareto" / "outputs_ga")
     p.add_argument("--pop-size", type=int, default=604, help="NSGA-II 种群规模（每代子代数）")
     p.add_argument("--generations", type=int, default=150)

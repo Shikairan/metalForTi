@@ -43,8 +43,8 @@ python -m Pareto.run_ga_design --target-ys 1201 --target-fs 0.2
 | 参数 | 默认 |
 |------|------|
 | `--data-dir` | `gnnDir/gnndataPT/r-gatPT` |
-| `--ckpt` | `modelAll/runs/best_rgat_full.pt` |
-| `--rgat-dir` | `modelAll` |
+| `--ckpt` | `modelAll/ysFs/runs/best_rgat_full.pt` |
+| `--rgat-dir` | `modelAll/ysFs` |
 | `--pop-size` | `604`（种群 / 每代子代数） |
 | `--generations` | `150` |
 | `--objectives` | `three`（默认，f1+f2+f3 三目标）/ `two`（仅 f1+f2，关闭 f3） |

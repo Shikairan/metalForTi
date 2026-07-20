@@ -23,8 +23,8 @@ class ArchiveForwardCountTest(unittest.TestCase):
     def test_forward_only_on_offspring(self) -> None:
         root = Path(__file__).resolve().parents[1]
         data_dir = root / "gnnDir" / "gnndataPT" / "r-gatPT"
-        ckpt = root / "modelAll" / "runs" / "best_rgat_full.pt"
-        rgat_dir = root / "modelAll"
+        ckpt = root / "modelAll" / "ysFs" / "runs" / "best_rgat_full.pt"
+        rgat_dir = root / "modelAll" / "ysFs"
 
         x, ys, fs, train_mask, _ = load_graph_bundle(data_dir)
         graph = torch.load(data_dir / "material_graph.pt", map_location="cpu", weights_only=False)

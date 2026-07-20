@@ -14,9 +14,9 @@
 | 项目 | 说明 |
 |------|------|
 | 输入 | `dataOri2.csv`，604 行数据行（不含表头） |
-| 输出 | `datagnn.csv`，604 行 × 32 列 |
+| 输出 | `datagnn.csv`，604 行 × 32 列；另有 `datagnnUts.csv` 为 604 行 × 33 列（追加 UTS） |
 | 行顺序 | **严格保持**，第 `i` 行输入对应第 `i` 行输出（GNN 节点索引） |
-| 忽略列 | `UTS`、`imgf` 及末尾无名附加列**不参与**变换 |
+| 忽略列 | **YS 版**（`datagnn.csv`）：`UTS`、`imgf` 及末尾无名附加列不参与变换。**UTS 版**（`datagnnUts.csv`）：以 `UTS` 为第三标签列参与均值归一化；仍忽略 `imgf` 及无名附加列 |
 | dtype | 全程 `float32` 计算与存储（统计量可用 `float64` 求取后写入） |
 
 ### 1.1 输入列 → 输出列映射
@@ -27,6 +27,7 @@
 | `testenv_0`, `testenv_1` | tem, fcr | 2 |
 | `coldway_0` … `coldway_17` | T1,t1,T2,t2,T3,t3,C1_1…C3_3 | 18（由 15 列导出） |
 | `YS`, `FS` | YS, FS | 2 |
+| （`datagnnUts` 追加）`UTS` | UTS | 1 |
 
 输出列顺序：
 
@@ -35,11 +36,18 @@ element_0..9 | testenv_0..1 | coldway_0..17 | YS | FS
      10      |      2       |      18       | 2  |  = 32
 ```
 
+`datagnnUts.csv`（33 列）：
+
+```
+element_0..9 | testenv_0..1 | coldway_0..17 | YS | FS | UTS
+     10      |      2       |      18       | 1  | 1  |  1  = 33
+```
+
 ---
 
 ## 2. 全局统计常量（基于 dataOri2.csv 全表 604 行）
 
-以下常量用于 **testenv 标准化** 与 **YS/FS 均值归一化**。若输入 CSV 行集变化，必须**重新计算**；否则逆变换将产生系统误差。
+以下常量用于 **testenv 标准化** 与 **YS/FS/UTS 均值归一化**。若输入 CSV 行集变化，必须**重新计算**；否则逆变换将产生系统误差。
 
 ### 2.1 testenv（Z-score）
 
@@ -56,8 +64,11 @@ element_0..9 | testenv_0..1 | coldway_0..17 | YS | FS
 |----|----------------------|
 | YS | 965.7821034430465 |
 | FS | 28.120464644701983 |
+| UTS | 1291.9939771048014 |
 
 小常数：`eps = 1e-8`（仅用于分母稳定，防止除零）。
+
+代码常量：`DEFAULT_YS_MEAN` / `DEFAULT_FS_MEAN` / `DEFAULT_UTS_MEAN`。
 
 ---
 
@@ -232,6 +243,37 @@ FS_raw = 14.697    →  FS_out = 14.697 / 28.120464644701983 ≈ 0.52264428
 ```
 
 > **与 `build_datagnn.py` 的差异：** 当前脚本写出**未归一化**的 YS/FS。要复现仓库内 `datagnn.csv`，必须在写出前对标签执行本节变换，或直接使用 `dataOri.csv`（其 YS/FS 已归一化）。
+
+---
+
+### 3.5 标签 UTS — 与 YS 相同的列均值归一化（`datagnnUts.csv`）
+
+`datagnnUts.csv` 在 `datagnn.csv` 的 30 维特征 + YS + FS 之外，**追加**均值归一化后的 `UTS` 列（共 33 列）。特征块与 YS/FS 数值应与 `datagnn.csv` 一致（`verify-uts` 可校验）。
+
+**正向 / 逆向（与 YS 同形）：**
+
+\[
+UTS_{out} = \frac{UTS_{raw}}{\overline{UTS} + \varepsilon},\qquad
+UTS_{raw} = UTS_{out} \cdot (\overline{UTS} + \varepsilon)
+\]
+
+其中 \(\overline{UTS} = 1291.9939771048014\)（`DEFAULT_UTS_MEAN`）。data1123 与 dataOri2 的 UTS 数值一致，无额外 ×100；FS 在从 data1123 读入时仍先 ×100 再归一化。
+
+**用户 API（`preprocess.preprocess_datagnn_repro`）：**
+
+| 函数 | 作用 |
+|------|------|
+| `normalize_uts_physical` / `denormalize_uts_model` | dataOri2 量纲 ↔ 模型量纲（UTS+FS） |
+| `normalize_uts_from_data1123` / `denormalize_uts_to_data1123` | data1123 ↔ 模型量纲（UTS；FS 含 ×100） |
+| `forward_preprocess_uts` / `inverse_preprocess_uts` | 整表三标签 YS/FS/UTS |
+| `write_datagnn_uts` / `read_datagnn_uts` | 读写 `datagnnUts.csv` |
+| `physical_label_means_for_uts` | 返回 `(ys_mean, fs_mean_dataori2, uts_mean)` |
+
+**示例（第 1 行）：**
+
+```
+UTS_raw = 1369.012  →  UTS_out = 1369.012 / 1291.9939771048014 ≈ 1.05961175
+```
 
 ---
 
@@ -551,6 +593,22 @@ python preprocess_datagnn_repro.py verify \
 python preprocess_datagnn_repro.py inverse \
   --input datagnn.csv \
   --output dataOri_restored.csv
+
+# ---------- datagnnUts（YS + FS + UTS）----------
+# 正向：写出 gnnDir/datacsv/datagnnUts.csv（33 列）
+python -m preprocess.preprocess_datagnn_repro forward-uts \
+  --input preprocess/dataOri2.csv \
+  --output gnnDir/datacsv/datagnnUts.csv
+
+# 特征与 YS/FS 对齐 datagnn.csv，并检查 UTS 均值归一化
+python -m preprocess.preprocess_datagnn_repro verify-uts \
+  --input preprocess/dataOri2.csv \
+  --reference gnnDir/datacsv/datagnn.csv
+
+# 逆向：还原物理量 YS/FS/UTS
+python -m preprocess.preprocess_datagnn_repro inverse-uts \
+  --input gnnDir/datacsv/datagnnUts.csv \
+  --output preprocess/dataOri_uts_restored.csv
 ```
 
 ---
@@ -564,8 +622,9 @@ python preprocess_datagnn_repro.py inverse \
 | testenv | Z-score 后与 §2.1 常量一致 |
 | coldway | 与 `preprocess_datagnn_repro` 实现逐元素一致（见 verify） |
 | YS/FS | `YS_out = YS_raw / 965.7821034430465`（+eps） |
+| UTS（`datagnnUts`） | `UTS_out = UTS_raw / 1291.9939771048014`（+eps）；前 32 列与 `datagnn.csv` 一致 |
 | 逆变换 testenv | 误差 ≈ 0 |
-| 逆变换 YS/FS | 误差 < 1e-10 |
+| 逆变换 YS/FS/UTS | 误差 < 1e-3（float32） |
 | 逆变换 coldway | 非零 cell 可 `exp` 还原；T=800&t=1 的激活槽（≈37 处）与未激活槽同为 [0,0]，不可唯一逆推 |
 | 逆变换 element/testenv/YS/FS | 与原始列最大误差 < 1e-3（float32 量级） |
 
@@ -578,8 +637,8 @@ python preprocess_datagnn_repro.py inverse \
 | `dataOri2.csv` | 物理量（如 1014.805） | 与 dataOri 相同 |
 | `dataOri.csv` | 已 mean 归一化（如 1.05076） | 与 dataOri2 相同 |
 
-从 `dataOri2` 生成与仓库一致的 `datagnn.csv`：**必须**对 YS/FS 执行 §3.4；特征三块（element / testenv / coldway）两文件结果相同。
+从 `dataOri2` 生成与仓库一致的 `datagnn.csv`：**必须**对 YS/FS 执行 §3.4；特征三块（element / testenv / coldway）两文件结果相同。生成 `datagnnUts.csv` 时对 YS/FS/UTS 均执行均值归一化（§3.4 + §3.5）。
 
 ---
 
-*文档版本：与 `build_datagnn.py`、`preprocess_datagnn_repro.py` 当前实现及 `dataOri2.csv`（604 行）统计量对齐。*
+*文档版本：与 `build_datagnn.py`、`preprocess_datagnn_repro.py` 当前实现及 `dataOri2.csv`（604 行）统计量对齐；含 `datagnnUts.csv`（YS/FS/UTS）。*
