@@ -1,2 +1,2 @@
-data/
-runs/
+# 仅忽略训练时的终端转储；data/ 与 runs/ 中的模型需上传
+train_stdout.log
