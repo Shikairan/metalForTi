@@ -1,19 +1,23 @@
 __pycache__/
 **/__pycache__/
 
-# 默认不跟踪权重；modelAll/utsFs 产物例外（需上传）
+# 默认不跟踪权重；modelAll/ysFs 与 utsFs 产物例外（需上传）
 *.pt
+!modelAll/ysFs/**/*.pt
 !modelAll/utsFs/**/*.pt
 
 modelAll/**/data/
+!modelAll/ysFs/data/
+!modelAll/ysFs/data/**
 !modelAll/utsFs/data/
 !modelAll/utsFs/data/**
 
 modelAll/**/runs/
+!modelAll/ysFs/runs/
+!modelAll/ysFs/runs/**
 !modelAll/utsFs/runs/
 !modelAll/utsFs/runs/**
 
-# 历史 mask / 其它训练日志
+# 历史 mask / 终端转储
 **/mask_round_history/
 **/runs/train_stdout.log
-modelAll/ysFs/runs/train_log.csv
