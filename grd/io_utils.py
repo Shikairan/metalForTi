@@ -32,26 +32,29 @@ def load_graph_bundle(data_dir: Path) -> Tuple[torch.Tensor, torch.Tensor, torch
     从 PT 数据目录加载反推所需的全部张量。
 
     参数:
-        data_dir: 含 material_graph.pt、ys.pt、fs.pt、train_mask.pt、val_mask.pt 的目录。
+        data_dir: 含 material_graph.pt、fs.pt、masks，以及 ys.pt **或** uts.pt。
 
     返回:
         x: 节点特征 (N, 30)，与 HeteroData['sample'].x 一致。
-        ys: 屈服强度标签 (N,)。
-        fs: 抗拉/疲劳强度标签 (N,)。
-        train_mask: 训练节点布尔掩码 (N,)。
-        val_mask: 验证节点布尔掩码 (N,)。
+        ys: 第一头标签 (N,)——YS 或 UTS（取决于目录中存在的文件）。
+        fs: FS 标签 (N,)。
+        train_mask / val_mask: 布尔掩码 (N,)。
 
     异常:
         FileNotFoundError: 任一必需文件缺失。
     """
     graph_path = data_dir / "material_graph.pt"
-    for name in ("material_graph.pt", "ys.pt", "fs.pt", "train_mask.pt", "val_mask.pt"):
+    for name in ("material_graph.pt", "fs.pt", "train_mask.pt", "val_mask.pt"):
         if not (data_dir / name).is_file():
             raise FileNotFoundError(f"Missing {data_dir / name}")
 
+    label_path = data_dir / "uts.pt" if (data_dir / "uts.pt").is_file() else data_dir / "ys.pt"
+    if not label_path.is_file():
+        raise FileNotFoundError(f"Missing ys.pt or uts.pt under {data_dir}")
+
     graph = torch.load(graph_path, map_location="cpu", weights_only=False)
     x = graph["sample"].x.float()
-    ys = torch.load(data_dir / "ys.pt", map_location="cpu", weights_only=False).reshape(-1).float()
+    ys = torch.load(label_path, map_location="cpu", weights_only=False).reshape(-1).float()
     fs = torch.load(data_dir / "fs.pt", map_location="cpu", weights_only=False).reshape(-1).float()
     train_mask = torch.load(data_dir / "train_mask.pt", map_location="cpu", weights_only=False).reshape(-1).bool()
     val_mask = torch.load(data_dir / "val_mask.pt", map_location="cpu", weights_only=False).reshape(-1).bool()

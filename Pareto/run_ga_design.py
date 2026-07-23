@@ -3,7 +3,8 @@
 run_ga_design.py — NSGA-II 帕累托遗传逆设计 CLI 入口。
 
 用法（metalForTi 根目录）:
-  python -m Pareto.run_ga_design --target-ys <float> --target-fs <float>
+  python -m Pareto.run_ga_design --target-uts <float> --target-fs <float>
+  # 兼容旧名：--target-ys 与 --target-uts 等价（第一头，utsFsAll 下为 UTS）
 """
 
 from __future__ import annotations
@@ -16,9 +17,10 @@ from typing import List, Optional
 import torch
 
 from preprocess.preprocess_datagnn_repro import (
+    denormalize_uts_to_data1123,
     load_testenv_stats_np,
-    physical_label_means_for_targets,
-    resolve_user_targets,
+    normalize_uts_from_data1123,
+    physical_label_means_for_uts,
 )
 from grd.feature_layout import bounds_from_train_x, build_projector
 from grd.io_utils import load_dual_rgat, load_graph_bundle, merge_hetero_edges
@@ -38,13 +40,23 @@ from Pareto.ga_breeding import make_offspring_expanded
 from Pareto.ga_compile import compile_genome
 from Pareto.ga_virtual_log import append_generation_virtual_log
 from Pareto.ga_operators import GAConfig, crossover_and_mutate
-from Pareto.ga_testenv_lock import FixedTestenvContext, resolve_fixed_testenv
+from Pareto.ga_testenv_lock import (
+    FixedTestenvContext,
+    post_apply_fixed_testenv_and_reeval,
+    resolve_fixed_testenv,
+)
 from Pareto.ga_report import (
     OutputRestoreContext,
     build_archive_summary,
     write_ga_summary_txt,
     write_pareto_json,
     write_pareto_scatter,
+)
+from Pareto.ga_meet_csv import MeetTargetCsvCollector
+from Pareto.ga_multi_gpu_eval import (
+    ShardedMultiGpuEvaluator,
+    evaluate_genomes,
+    parse_eval_devices,
 )
 
 logger = logging.getLogger("Pareto.run_ga_design")
@@ -141,29 +153,26 @@ def _resolve_device(requested: str, force_cpu: bool) -> str:
 
 
 def _resolve_targets(
-    target_ys: float,
+    target_uts: float,
     target_fs: float,
     *,
     targets_physical: bool,
     data1123_path: Path,
 ):
-    """data1123 原始目标 → 模型量纲 + 物理量。"""
-    ys_mean, fs_mean = physical_label_means_for_targets(data1123_path)
-    resolved = resolve_user_targets(
-        target_ys,
-        target_fs,
-        ys_mean,
-        fs_mean,
-        targets_physical=targets_physical,
-    )
-    return (
-        resolved.ys_model,
-        resolved.fs_model,
-        resolved.ys_physical,
-        resolved.fs_data1123,
-        resolved.ys_mean,
-        resolved.fs_mean,
-    )
+    """data1123 原始 UTS/FS → 模型量纲 + 物理量（第一头为 UTS）。"""
+    _ys_mean, fs_mean, uts_mean = physical_label_means_for_uts(data1123_path)
+    if targets_physical:
+        uts_phys = float(target_uts)
+        fs_d1123 = float(target_fs)
+        uts_model, fs_model = normalize_uts_from_data1123(
+            uts_phys, fs_d1123, uts_mean=uts_mean, fs_mean=fs_mean
+        )
+    else:
+        uts_model, fs_model = float(target_uts), float(target_fs)
+        uts_phys, fs_d1123 = denormalize_uts_to_data1123(
+            uts_model, fs_model, uts_mean=uts_mean, fs_mean=fs_mean
+        )
+    return uts_model, fs_model, uts_phys, fs_d1123, uts_mean, fs_mean
 
 
 def _resolve_testenv_stats_path(data_dir: Path, root: Path) -> Path:
@@ -181,27 +190,49 @@ def _resolve_testenv_stats_path(data_dir: Path, root: Path) -> Path:
 
 def _parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parents[1]
-    p = argparse.ArgumentParser(description="NSGA-II 帕累托遗传逆设计")
-    p.add_argument("--target-ys", type=float, required=True, help="目标 YS（与 data1123.csv 同量纲，MPa）")
+    p = argparse.ArgumentParser(description="NSGA-II 帕累托遗传逆设计（默认 utsFsAll / UTS+FS）")
+    p.add_argument(
+        "--target-uts",
+        type=float,
+        default=None,
+        help="目标 UTS（与 data1123.csv 同量纲，MPa）",
+    )
+    p.add_argument(
+        "--target-ys",
+        type=float,
+        default=None,
+        help="兼容旧名：与 --target-uts 等价（第一头标签）",
+    )
     p.add_argument("--target-fs", type=float, required=True, help="目标 FS（与 data1123.csv 的 FS 列同量纲）")
     p.add_argument(
         "--targets-physical",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="target-ys/fs 为 data1123 原始量纲，自动换算为模型量纲（默认开启；--no-targets-physical 表示已是 ys.pt/fs.pt 量纲）",
+        help="target 为 data1123 原始量纲（默认）；--no-targets-physical 表示已是模型量纲",
     )
-    p.add_argument("--data-dir", type=Path, default=root / "gnnDir" / "gnndataPT" / "r-gatPT")
+    p.add_argument(
+        "--data-dir",
+        type=Path,
+        default=root / "modelAll" / "utsFsAll" / "data",
+        help="图数据包（默认 utsFsAll/data，含 uts.pt）",
+    )
     p.add_argument(
         "--ckpt",
         type=Path,
-        default=root / "modelAll" / "ysFs" / "runs" / "best_rgat_full.pt",
+        default=root / "modelAll" / "utsFsAll" / "runs" / "best_rgat_uts_fs_all.pt",
     )
-    p.add_argument("--rgat-dir", type=Path, default=root / "modelAll" / "ysFs")
+    p.add_argument("--rgat-dir", type=Path, default=root / "modelAll" / "utsFsAll")
     p.add_argument("--out-dir", type=Path, default=root / "Pareto" / "outputs_ga")
     p.add_argument("--pop-size", type=int, default=604, help="NSGA-II 种群规模（每代子代数）")
     p.add_argument("--generations", type=int, default=150)
     p.add_argument("--objectives", choices=["two", "three"], default="three")
     p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument(
+        "--eval-devices",
+        type=str,
+        default=None,
+        help="多卡并行评估设备，如 all 或 0,1,2,3（默认关闭，仅用 --device 单卡）",
+    )
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--p-cross", type=float, default=0.9)
     p.add_argument("--p-mut", type=float, default=0.15)
@@ -212,13 +243,14 @@ def _parse_args() -> argparse.Namespace:
         "--fixed-tem",
         type=float,
         default=None,
-        help="固定试验温度 tem（data1123 量纲）；须与 --fixed-sr 同时提供",
+        help="约束试验温度 tem（data1123）；须与 --fixed-sr 同时提供。"
+        "遗传阶段自由进化；每代结束后对达标子代改写 tem/sr 并重评",
     )
     p.add_argument(
         "--fixed-sr",
         type=float,
         default=None,
-        help="固定应变速率 sr（data1123 量纲）；须与 --fixed-tem 同时提供",
+        help="约束应变速率 sr（data1123）；须与 --fixed-tem 同时提供",
     )
     p.add_argument(
         "--breeder-pool",
@@ -227,15 +259,33 @@ def _parse_args() -> argparse.Namespace:
         help="population: 标准二元锦标赛选父（默认）；"
         "expanded: 拓展育种池 + 随机移民（代 1 起生效）",
     )
+    p.add_argument(
+        "--write-meet-csv",
+        action="store_true",
+        default=False,
+        help="将各代达标（f1=f2=0）基因去重写入 CSV（默认关闭）",
+    )
+    p.add_argument(
+        "--meet-csv",
+        type=Path,
+        default=None,
+        help="达标基因 CSV 路径（默认 <out-dir>/meet_target_genes.csv；需配合 --write-meet-csv）",
+    )
     p.add_argument("--force-cpu", action="store_true")
-    return p.parse_args()
+    args = p.parse_args()
+    if args.target_uts is None and args.target_ys is None:
+        p.error("必须提供 --target-uts（或兼容别名 --target-ys）")
+    if args.target_uts is not None and args.target_ys is not None and args.target_uts != args.target_ys:
+        p.error("--target-uts 与 --target-ys 同时给出时必须相等")
+    args.target_primary = args.target_uts if args.target_uts is not None else args.target_ys
+    return args
 
 
 def _prepare_breeding_parents(
     parents: List[Individual],
     fixed_testenv: Optional[FixedTestenvContext],
 ) -> List[Individual]:
-    """育种前覆盖父本 testenv（604 档案条目本身不改写）。"""
+    """育种前可选覆盖父本 testenv（当前主流程不再使用，保留兼容）。"""
     if fixed_testenv is None:
         return parents
     return [
@@ -260,8 +310,10 @@ def _make_offspring(
     ga_cfg: GAConfig,
     fixed_testenv: Optional[FixedTestenvContext] = None,
 ) -> List[torch.Tensor]:
-    """NSGA-II 二元锦标赛选父，产出 pop_size 个子代基因组。"""
-    parents = _prepare_breeding_parents(parents, fixed_testenv)
+    """NSGA-II 二元锦标赛选父，产出 pop_size 个子代基因组（testenv 自由进化）。"""
+    # 主流程不再在育种前锁定 testenv；fixed_testenv 仅保留参数兼容
+    _ = fixed_testenv
+    parents = list(parents)
     assign_rank_and_crowding(parents)
     children: List[torch.Tensor] = []
     while len(children) < pop_size:
@@ -284,11 +336,11 @@ def _make_offspring(
 
 def _evaluate_offspring(
     genomes: List[torch.Tensor],
-    evaluator: FitnessEvaluator,
+    evaluator,
 ) -> List[Individual]:
+    fitness_list = evaluate_genomes(evaluator, genomes)
     out: List[Individual] = []
-    for g in genomes:
-        fit = evaluator.evaluate_one(g)
+    for g, fit in zip(genomes, fitness_list):
         out.append(
             Individual(
                 genome=g,
@@ -303,59 +355,74 @@ def main() -> None:
     args = _parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
     device = _resolve_device(args.device, args.force_cpu)
+    eval_devices = parse_eval_devices(
+        args.eval_devices,
+        force_cpu=args.force_cpu,
+        fallback_device=device,
+    )
     rng = torch.Generator().manual_seed(args.seed)
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("使用设备: %s | 算法: NSGA-II（非支配排序 + 拥挤距离）", device)
+    if len(eval_devices) > 1:
+        logger.info(
+            "使用设备: 多卡并行 %s | 算法: NSGA-II（非支配排序 + 拥挤距离）| 模型: utsFsAll(UTS+FS)",
+            eval_devices,
+        )
+    else:
+        logger.info(
+            "使用设备: %s | 算法: NSGA-II（非支配排序 + 拥挤距离）| 模型: utsFsAll(UTS+FS)",
+            eval_devices[0],
+        )
     root = Path(__file__).resolve().parents[1]
-    x, ys, fs, train_mask, _ = load_graph_bundle(args.data_dir)
+    x, uts_labels, fs, train_mask, _ = load_graph_bundle(args.data_dir)
     targets_physical = args.targets_physical
     (
-        target_ys,
+        target_uts,
         target_fs,
-        target_ys_phys,
+        target_uts_phys,
         target_fs_phys,
-        ys_mean,
+        uts_mean,
         fs_mean,
     ) = _resolve_targets(
-        args.target_ys,
+        args.target_primary,
         args.target_fs,
         targets_physical=targets_physical,
         data1123_path=root / "preprocess" / "data1123.csv",
     )
     te_mean, te_std = load_testenv_stats_np(_resolve_testenv_stats_path(args.data_dir, root))
     restore = OutputRestoreContext(
-        ys_mean=ys_mean,
+        ys_mean=uts_mean,
         fs_mean=fs_mean,
         te_mean=te_mean,
         te_std=te_std,
-        target_ys_physical=target_ys_phys,
+        target_ys_physical=target_uts_phys,
         target_fs_physical=target_fs_phys,
     )
     if targets_physical:
         logger.info(
-            "目标（data1123）YS=%.4f FS=%.6f → 模型量纲 YS=%.6f FS=%.6f "
-            "(全表均值 YS=%.4f FS_dataOri2=%.4f)",
-            target_ys_phys,
+            "目标（data1123）UTS=%.4f FS=%.6f → 模型量纲 UTS=%.6f FS=%.6f "
+            "(全表均值 UTS=%.4f FS_dataOri2=%.4f)",
+            target_uts_phys,
             target_fs_phys,
-            target_ys,
+            target_uts,
             target_fs,
-            ys_mean,
+            uts_mean,
             fs_mean,
         )
     else:
         logger.info(
-            "目标（模型量纲）YS=%.6f FS=%.6f | 对应 data1123 YS=%.4f FS=%.6f",
-            target_ys,
+            "目标（模型量纲）UTS=%.6f FS=%.6f | 对应 data1123 UTS=%.4f FS=%.6f",
+            target_uts,
             target_fs,
-            target_ys_phys,
+            target_uts_phys,
             target_fs_phys,
         )
     graph = torch.load(args.data_dir / "material_graph.pt", map_location="cpu", weights_only=False)
     edge_index, edge_type = merge_hetero_edges(graph)
     ctx = GraphContext.from_tensors(x, edge_index, edge_type)
 
-    model, _ = load_dual_rgat(args.ckpt, args.rgat_dir, device)
+    load_device = "cpu" if len(eval_devices) > 1 else eval_devices[0]
+    model, _ = load_dual_rgat(args.ckpt, args.rgat_dir, load_device)
     bounds = bounds_from_train_x(x, train_mask)
     projector = build_projector(x, bounds)
     fixed_testenv = resolve_fixed_testenv(
@@ -368,27 +435,46 @@ def main() -> None:
     x_train = x[train_mask].clone()
     train_node_indices = torch.where(train_mask)[0]
 
+    # 遗传阶段不锁定 testenv（允许自由进化）；代末再对达标个体改写并重评
     ga_cfg = GAConfig(
         p_cross=args.p_cross,
         p_mut=args.p_mut,
-        fixed_testenv=fixed_testenv,
+        fixed_testenv=None,
     )
     use_anchor = args.objectives == "three"
-    evaluator = FitnessEvaluator(
-        model,
-        ctx,
-        x_train,
-        target_ys,
-        target_fs,
-        device,
-        use_anchor=use_anchor,
-        element_thr=args.element_thr,
-        testenv_thr=args.testenv_thr,
-        coldway_thr=args.coldway_thr,
-        train_node_indices=train_node_indices,
-    )
+    if len(eval_devices) > 1:
+        evaluator = ShardedMultiGpuEvaluator.create(
+            model,
+            eval_devices,
+            ctx=ctx,
+            x_train=x_train,
+            target_ys=target_uts,
+            target_fs=target_fs,
+            use_anchor=use_anchor,
+            element_thr=args.element_thr,
+            testenv_thr=args.testenv_thr,
+            coldway_thr=args.coldway_thr,
+            train_node_indices=train_node_indices,
+        )
+        del model
+        logger.info("已在 %d 张卡上挂载模型副本: %s", len(eval_devices), eval_devices)
+    else:
+        evaluator = FitnessEvaluator(
+            model,
+            ctx,
+            x_train,
+            target_uts,
+            target_fs,
+            eval_devices[0],
+            use_anchor=use_anchor,
+            element_thr=args.element_thr,
+            testenv_thr=args.testenv_thr,
+            coldway_thr=args.coldway_thr,
+            train_node_indices=train_node_indices,
+        )
+    device = ",".join(eval_devices)
 
-    archive = GeneArchive.from_graph(x, ys, fs, evaluator)
+    archive = GeneArchive.from_graph(x, uts_labels, fs, evaluator)
 
     def _repair_genome(g: torch.Tensor) -> torch.Tensor:
         return compile_genome(g, bounds, projector, x_train, rng=rng)
@@ -409,18 +495,26 @@ def main() -> None:
         )
         virtual_log_path.write_text("", encoding="utf-8")
 
+    meet_collector: MeetTargetCsvCollector | None = None
+    meet_csv_path: Path | None = None
+    if args.write_meet_csv:
+        meet_csv_path = args.meet_csv or (args.out_dir / "meet_target_genes.csv")
+        meet_collector = MeetTargetCsvCollector(restore, path=meet_csv_path)
+        logger.info("已开启达标基因 CSV 每代落盘（去重）→ %s", meet_csv_path.resolve())
+
     logger.info(
-        "基因库已初始化：%d 原始节点 | 种群规模 %d | 目标 %s",
+        "基因库已初始化：%d 原始节点 | 种群规模 %d | 目标 %s | ckpt=%s",
         n_orig,
         args.pop_size,
         args.objectives,
+        args.ckpt,
     )
     _log_generation(
         archive,
         "代 0（原始池就绪，标签适应度）",
         evaluator,
         original_parents[: args.pop_size] if len(original_parents) > args.pop_size else original_parents,
-        target_ys=target_ys,
+        target_ys=target_uts,
         target_fs=target_fs,
         restore=restore,
         ys_fs_from_labels=True,
@@ -440,7 +534,7 @@ def main() -> None:
                 projector,
                 rng,
                 ga_cfg,
-                fixed_testenv=fixed_testenv,
+                fixed_testenv=None,
             )
             children_genomes = plan.genomes
             logger.info(
@@ -462,11 +556,52 @@ def main() -> None:
                 projector,
                 rng,
                 ga_cfg,
-                fixed_testenv=fixed_testenv,
+                fixed_testenv=None,
             )
             plan = None
 
         offspring = _evaluate_offspring(children_genomes, evaluator)
+
+        if fixed_testenv is not None:
+            offspring, te_stats = post_apply_fixed_testenv_and_reeval(
+                offspring, fixed_testenv, evaluator
+            )
+            logger.info(
+                "代 %d tem/sr 代末改写：达标 %d → 改写重评 %d（重评后仍达标 %d） "
+                "约束 tem=%.4f sr=%.6f",
+                gen,
+                te_stats["n_meet_target"],
+                te_stats["n_rewritten"],
+                te_stats["n_still_meet_after"],
+                fixed_testenv.tem_physical,
+                fixed_testenv.sr_physical,
+            )
+            if te_stats["deltas"]:
+                d0 = te_stats["deltas"][0]
+                logger.info(
+                    "代 %d 改写样例：UTS %.4f→%.4f  FS %.6f→%.6f  "
+                    "f1 %.4f→%.4f  f2 %.6f→%.6f",
+                    gen,
+                    d0["uts_pred_before"],
+                    d0["uts_pred_after"],
+                    d0["fs_pred_before"],
+                    d0["fs_pred_after"],
+                    d0["f1_before"],
+                    d0["f1_after"],
+                    d0["f2_before"],
+                    d0["f2_after"],
+                )
+
+        if meet_collector is not None:
+            n_csv = meet_collector.add_individuals(offspring, generation=gen)
+            logger.info(
+                "代 %d 达标基因 CSV：本轮新增 %d（累计去重 %d）已落盘",
+                gen,
+                n_csv,
+                len(meet_collector),
+            )
+
+        children_genomes = [ind.genome for ind in offspring]
         fitness_list: List[FitnessResult] = [
             ind.fitness for ind in offspring if ind.fitness is not None
         ]
@@ -525,7 +660,7 @@ def main() -> None:
             f"代 {gen}（NSGA-II 环境选择后）",
             evaluator,
             population,
-            target_ys=target_ys,
+            target_ys=target_uts,
             target_fs=target_fs,
             restore=restore,
             new_virtual_count=args.pop_size,
@@ -547,15 +682,17 @@ def main() -> None:
     }
     if use_expanded_breeder:
         paths["virtual_nodes_log"] = str(virtual_log_path.resolve())
+    if meet_csv_path is not None:
+        paths["meet_target_csv"] = str(meet_csv_path.resolve())
     summary = build_archive_summary(
         archive,
         front,
-        target_ys=target_ys,
+        target_ys=target_uts,
         target_fs=target_fs,
-        target_ys_physical=target_ys_phys,
+        target_ys_physical=target_uts_phys,
         target_fs_physical=target_fs_phys,
         targets_physical=targets_physical,
-        label_means={"ys": ys_mean, "fs": fs_mean},
+        label_means={"uts": uts_mean, "fs": fs_mean},
         restore=restore,
         objectives=args.objectives,
         offspring_per_generation=args.pop_size,
@@ -563,12 +700,21 @@ def main() -> None:
         device=device,
         paths=paths,
         selection_method="NSGA-II + expanded breeder" if use_expanded_breeder else "NSGA-II",
-        fixed_testenv=fixed_testenv.to_summary_dict() if fixed_testenv else None,
+        fixed_testenv=(
+            {
+                **fixed_testenv.to_summary_dict(),
+                "mode": "post_apply_on_meet_target",
+            }
+            if fixed_testenv
+            else None
+        ),
         breeder_pool=args.breeder_pool,
     )
     write_pareto_json(args.out_dir / "pareto_front.json", summary)
     write_ga_summary_txt(args.out_dir / "ga_summary.txt", summary)
     write_pareto_scatter(args.out_dir / "pareto_scatter.png", summary)
+    if meet_collector is not None and meet_csv_path is not None:
+        meet_collector.write_csv(meet_csv_path)  # 终局再 flush 一次，确保一致
     logger.info("已写入 %s", args.out_dir)
 
 

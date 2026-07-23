@@ -76,7 +76,7 @@ FIELD_DESCRIPTIONS_CN: Dict[str, str] = {
     "knee_index": "加权和折中解在 individuals 中的索引",
     "pareto_representative": "最终种群帕累托代表（拥挤距离最大）",
     "best_virtual": "基因库历史最优虚拟个体（加权分 f1+f2+0.1*f3 最小）",
-    "fixed_testenv": "用户锁定的试验环境（data1123 tem/sr）；省略表示 testenv 参与遗传",
+    "fixed_testenv": "tem/sr 约束（data1123）；mode=post_apply_on_meet_target 表示代末对达标子代改写并重评",
     "breeder_pool": "父本策略：population 或 expanded",
     "gene_source": "基因来源（原始/杂交虚拟/移民）",
     "field_descriptions": "字段中文说明",

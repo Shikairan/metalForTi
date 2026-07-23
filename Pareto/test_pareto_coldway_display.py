@@ -15,7 +15,7 @@ from preprocess.preprocess_datagnn_repro import inverse_coldway_flat_18
 
 
 def test_coldway_unified_t_t_labels() -> None:
-    """方式 2/3 不再误标为 C_a/C_b，统一为 T、t，并还原为物理量。"""
+    """冷却方式显示为 水冷/空冷/炉冷；参数统一为 T、t，并还原为物理量。"""
     cold = np.zeros(18, dtype=np.float32)
     cold[0], cold[1] = 0.0, float(np.log(0.25))
     cold[10], cold[11] = -0.3567, 2.7726
@@ -24,9 +24,10 @@ def test_coldway_unified_t_t_labels() -> None:
     lines = format_coldway_lines(phys.reshape(3, 3, 2))
     text = "\n".join(lines)
     assert "C_a" not in text and "C_b" not in text
+    assert "方式1" not in text and "方式2" not in text and "方式3" not in text
     assert "T=" in text and "t=" in text
-    assert "阶段1  方式1" in text
-    assert "阶段2  方式3" in text
+    assert "阶段1  水冷" in text
+    assert "阶段2  炉冷" in text
     assert "阶段3: 未启用" in text
     assert "800.0000" in text
     assert "0.2500" in text

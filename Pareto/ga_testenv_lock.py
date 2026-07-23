@@ -106,8 +106,8 @@ def resolve_fixed_testenv(
         )
 
     logger.info(
-        "试验环境已锁定：tem=%.4f sr=%.6f（data1123）→ z=[%.6f, %.6f]；"
-        "优化仅演化成分与 coldway（父本/子代评估前覆盖 testenv，604 档案保留原始值）",
+        "试验环境约束：tem=%.4f sr=%.6f（data1123）→ z=[%.6f, %.6f]；"
+        "遗传阶段 testenv 自由进化；每代结束后对达标子代改写 tem/sr 并重评",
         fixed_tem,
         fixed_sr,
         float(z_np[0]),
@@ -118,3 +118,78 @@ def resolve_fixed_testenv(
         sr_physical=float(fixed_sr),
         testenv_z_np=z_np,
     )
+
+
+def post_apply_fixed_testenv_and_reeval(
+    offspring: list,
+    fixed: FixedTestenvContext,
+    evaluator,
+    *,
+    eps: float = 1e-8,
+) -> tuple[list, dict]:
+    """
+    代末：对本轮已达标（f1=f2=0）的子代，将 tem/sr 改为约束值后重新 GNN 评估。
+
+    返回 (更新后的 Individual 列表, 统计字典)。
+    需重评的基因组走 ``evaluate_population``（多卡时自动分片并行）。
+    """
+    from Pareto.ga_nsga2 import Individual  # 局部导入避免环依赖
+
+    n_meet = 0
+    deltas: list[dict] = []
+    out: list = list(offspring)  # 先拷贝，再按索引替换
+    import torch
+
+    reeval_slots: list[tuple[int, object, object]] = []  # (idx, g_new, fit_before)
+
+    for i, ind in enumerate(offspring):
+        fit = getattr(ind, "fitness", None)
+        if fit is None:
+            continue
+        if not (float(fit.f1) <= eps and float(fit.f2) <= eps):
+            continue
+        n_meet += 1
+        g_new = fixed.apply(ind.genome)
+        if torch.allclose(
+            g_new[10:12].detach().cpu().float(),
+            ind.genome[10:12].detach().cpu().float(),
+            atol=1e-6,
+            rtol=0,
+        ):
+            continue
+        reeval_slots.append((i, g_new, fit))
+
+    if reeval_slots:
+        genomes = [g for _, g, _ in reeval_slots]
+        if hasattr(evaluator, "evaluate_population"):
+            fits_new = evaluator.evaluate_population(genomes)
+        else:
+            fits_new = [evaluator.evaluate_one(g) for g in genomes]
+        for (idx, g_new, fit_before), fit_new in zip(reeval_slots, fits_new):
+            deltas.append(
+                {
+                    "uts_pred_before": fit_before.ys_pred,
+                    "fs_pred_before": fit_before.fs_pred,
+                    "f1_before": fit_before.f1,
+                    "f2_before": fit_before.f2,
+                    "uts_pred_after": fit_new.ys_pred,
+                    "fs_pred_after": fit_new.fs_pred,
+                    "f1_after": fit_new.f1,
+                    "f2_after": fit_new.f2,
+                }
+            )
+            out[idx] = Individual(
+                genome=g_new,
+                fitness=fit_new,
+                objectives=evaluator.objectives_tensor(fit_new),
+            )
+
+    stats = {
+        "n_meet_target": n_meet,
+        "n_rewritten": len(reeval_slots),
+        "n_still_meet_after": sum(
+            1 for d in deltas if d["f1_after"] <= eps and d["f2_after"] <= eps
+        ),
+        "deltas": deltas,
+    }
+    return out, stats

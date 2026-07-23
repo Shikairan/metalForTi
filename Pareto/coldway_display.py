@@ -6,6 +6,8 @@ import numpy as np
 _COLDWAY_STAGES = 3
 _COLDWAY_METHODS = 3
 _COLDWAY_PARAM_NAMES = ("T", "t")
+# 与 data1123 列 C*_1 / C*_2 / C*_3 一一对应
+COLDWAY_METHOD_NAMES = ("水冷", "空冷", "炉冷")
 
 
 def fmt_coldway_val(v: float, nd: int = 4) -> str:
@@ -44,8 +46,9 @@ def format_coldway_lines(mat: np.ndarray) -> list[str]:
         norms = [float(np.linalg.norm(row[m])) for m in range(_COLDWAY_METHODS)]
         m_best = int(max(range(_COLDWAY_METHODS), key=lambda m: norms[m]))
         a, b = float(row[m_best, 0]), float(row[m_best, 1])
+        method = COLDWAY_METHOD_NAMES[m_best]
         lines.append(
-            f"    阶段{s + 1}  方式{m_best + 1}  "
+            f"    阶段{s + 1}  {method}  "
             f"{p0}={fmt_coldway_val(a):>10}  {p1}={fmt_coldway_val(b):>10}"
         )
     if last_active < 0:

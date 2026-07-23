@@ -15,23 +15,26 @@
 ```bash
 export PYTHONPATH="$(pwd):${PYTHONPATH}"
 
-# 输入物理量 YS/FS（MPa 等，预处理前数值，默认与 data1123.csv 同量纲）
-python -m Pareto.run_ga_design --target-ys 1014.8 --target-fs 0.147
+# 输入物理量 UTS/FS（默认与 data1123.csv 同量纲）；默认加载 utsFsAll
+python -m Pareto.run_ga_design --target-uts 1369 --target-fs 0.147
 
-# 若 target 已与 ys.pt/fs.pt 同量纲（均值归一化后）
-python -m Pareto.run_ga_design --target-ys 1.05 --target-fs 0.52 --no-targets-physical
+# 兼容旧参数名（第一头）
+python -m Pareto.run_ga_design --target-ys 1369 --target-fs 0.147
+
+# 若 target 已与模型量纲一致（均值归一化后）
+python -m Pareto.run_ga_design --target-uts 1.06 --target-fs 0.52 --no-targets-physical
 ```
 
 **量纲说明**（输入与输出均对齐 **data1123.csv**）：
 
 1. **CLI 输入**：与 `data1123.csv` 列刻度一致
-   - `--target-ys`：`YS` 列（MPa）
+   - `--target-uts`（或 `--target-ys`）：`UTS` 列（MPa；第一头）
    - `--target-fs`：`FS` 列（直接读表内数值，如 `0.147`；**勿**使用 dataOri2 的 `14.7`/`20`）
-2. **内部 Pareto**：自动换算为 `ys.pt` / `fs.pt` 模型量纲后优化
+2. **内部 Pareto**：自动换算为 `uts.pt` / `fs.pt` 模型量纲后优化
 3. **日志 / JSON 输出**：逆变换为 data1123 物理量
 
 ```bash
-python -m Pareto.run_ga_design --target-ys 1201 --target-fs 0.2
+python -m Pareto.run_ga_design --target-uts 1550 --target-fs 0.2
 ```
 
 若手头为 dataOri2 的 FS（如 `20`），请先 ÷100 得到 data1123 值（`0.2`）再传入。
@@ -42,36 +45,48 @@ python -m Pareto.run_ga_design --target-ys 1201 --target-fs 0.2
 
 | 参数 | 默认 |
 |------|------|
-| `--data-dir` | `gnnDir/gnndataPT/r-gatPT` |
-| `--ckpt` | `modelAll/ysFs/runs/best_rgat_full.pt` |
-| `--rgat-dir` | `modelAll/ysFs` |
+| `--data-dir` | `modelAll/utsFsAll/data` |
+| `--ckpt` | `modelAll/utsFsAll/runs/best_rgat_uts_fs_all.pt` |
+| `--rgat-dir` | `modelAll/utsFsAll` |
 | `--pop-size` | `604`（种群 / 每代子代数） |
 | `--generations` | `150` |
 | `--objectives` | `three`（默认，f1+f2+f3 三目标）/ `two`（仅 f1+f2，关闭 f3） |
 
 **三目标说明**（方案 A：单边欠达标，达标或超额不罚）：
-- **f1** = max(0, 目标 YS − 预测 YS)（模型量纲）
+- **f1** = max(0, 目标 UTS − 预测 UTS)（模型量纲）
 - **f2** = max(0, 目标 FS − 预测 FS)（模型量纲）
 - **f3** = 与训练集最近邻的 **L2 距离**（锚定项，越小越接近已知配方）
 - 原始 604 图节点自身就是训练样本，**f3 常为 0.0000**（不是未开启）；虚拟子代通常 f3 > 0
 
 ```bash
 # 默认三目标（含 f3）
-python -m Pareto.run_ga_design --target-ys 1201 --target-fs 0.2
+python -m Pareto.run_ga_design --target-uts 1550 --target-fs 0.2
 
-# 仅 YS/FS 两目标，关闭 f3
-python -m Pareto.run_ga_design --target-ys 1201 --target-fs 0.2 --objectives two
+# 仅 UTS/FS 两目标，关闭 f3
+python -m Pareto.run_ga_design --target-uts 1550 --target-fs 0.2 --objectives two
 ```
 
 **固定试验环境**（可选；须同时提供，量纲与 data1123 一致）：
 
 ```bash
-# 锁定 tem/sr，仅优化成分 + coldway（28 维）
-python -m Pareto.run_ga_design --target-ys 1014.8 --target-fs 0.147 \
+# 遗传阶段 tem/sr 自由进化；每代结束后对「已达标」子代改写 tem/sr 并重新 GNN 评估
+python -m Pareto.run_ga_design --target-uts 1369 --target-fs 0.147 \
   --fixed-tem 25 --fixed-sr 0.001
 ```
 
-省略 `--fixed-tem/--fixed-sr` 时，30 维全部参与遗传（默认）。
+省略 `--fixed-tem/--fixed-sr` 时，30 维全部参与遗传，且不做代末改写（默认）。
+
+**达标基因 CSV**（默认关闭；**每代落盘**，启动即写表头）：
+
+```bash
+python -m Pareto.run_ga_design --target-uts 1369 --target-fs 0.147 \
+  --write-meet-csv --out-dir Pareto/output_pareto10000
+# 可选：--meet-csv /path/to/out.csv（默认 <out-dir>/meet_target_genes.csv）
+```
+
+各代 `f1=f2=0` 的子代去重后写入 CSV；有新增时立刻原子覆盖落盘，不必等全部代数结束。文件编码为 **GBK**（便于中文 Excel 直接打开）。
+
+**默认模型**：`modelAll/utsFsAll`（UTS+FS，604 全训练）。目标用 `--target-uts`（兼容旧名 `--target-ys`）。
 
 **拓展育种**（默认关闭，显式开启）：
 
@@ -84,6 +99,19 @@ python -m Pareto.run_ga_design --target-ys 1014.8 --target-fs 0.147 \
 - 每代新增虚拟节点写入 `outputs_ga/virtual_nodes_log.jsonl`（含 `offspring_kind`、`is_immigrant`、适应度与 30 维基因组）
 - 虚拟进育种池：50% 加权 top + 50% 随机（每代最多 200 条虚拟抽样）
 
+**多卡并行评估**（默认关闭；逻辑见 `Pareto/ga_multi_gpu_eval.py`）：
+
+```bash
+# 使用当前进程可见的全部 GPU（受 CUDA_VISIBLE_DEVICES 约束）
+python -m Pareto.run_ga_design --target-uts 1369 --target-fs 0.147 --eval-devices all
+
+# 或显式指定
+CUDA_VISIBLE_DEVICES=0,1,2,3 python -m Pareto.run_ga_design \
+  --target-uts 1369 --target-fs 0.147 --eval-devices 0,1,2,3
+```
+
+每代子代基因组均分到各卡，每卡一份模型副本并行 `evaluate_one`；代末 tem/sr 重评同样走批量并行。未指定 `--eval-devices` 时仍为 `--device` 单卡。
+
 CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 
 完整 150 代约 **604×150 = 90600** 次 GNN forward（仅子代）。
@@ -93,6 +121,7 @@ CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 - `Pareto/outputs_ga/pareto_front.json` — 最终种群第一非支配层（**数值已还原为 data1123 物理量纲**）
 - `Pareto/outputs_ga/ga_summary.txt` — 文本摘要（含种群帕累托代表、基因库最优虚拟个体）
 - `Pareto/outputs_ga/pareto_scatter.png` — f1/f2 散点（物理量纲欠达标）
+- `Pareto/outputs_ga/meet_target_genes.csv` — **仅 `--write-meet-csv`**：各代达标基因去重 CSV
 - `Pareto/outputs_ga/virtual_nodes_log.jsonl` — **仅 `--breeder-pool expanded`**：每代新增虚拟节点调研日志
 
 ### 输出字段（物理量纲，30 维结构不变）
@@ -110,7 +139,7 @@ CPU 冒烟：`--force-cpu --pop-size 10 --generations 2`
 - **欠达标（展示）**：物理量纲下的 max(0, 目标 − 预测)
 - **f1/f2/f3（NSGA-II 优化）**：模型量纲，与实际帕累托排序一致
 
-每代日志中 coldway 各阶段**统一显示物理量 `T`、`t`**（不再对方式 2/3 误标为 C_a/C_b），数值固定 4 位小数。
+每代日志中 coldway 各阶段**统一显示物理量 `T`、`t`**；冷却方式显示为 **水冷 / 空冷 / 炉冷**（对应 `C*_1/2/3`），数值固定 4 位小数。
 
 每代日志展示：**种群帕累托代表**、**基因库最优虚拟个体**（若有）与前沿规模。
 
