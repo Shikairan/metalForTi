@@ -11,7 +11,10 @@ from .constants import GAT_HEADS, MODEL_ALL_DIR, NUM_RELATIONS, RGAT_DOUBLE_DIR
 
 
 def _ensure_rgat_import() -> None:
-    for d in (MODEL_ALL_DIR, RGAT_DOUBLE_DIR):
+    from .constants import METAL_FOR_TI_ROOT
+
+    uts_all = METAL_FOR_TI_ROOT / "modelAll" / "utsFsAll"
+    for d in (MODEL_ALL_DIR, uts_all, RGAT_DOUBLE_DIR):
         p = str(d)
         if p not in sys.path:
             sys.path.insert(0, p)
@@ -86,27 +89,3 @@ def teacher_forward(
     return model(x, edge_index, edge_type)
 
 
-@torch.no_grad()
-def collect_branch_hidden(
-    model: torch.nn.Module,
-    x: torch.Tensor,
-    edge_index: torch.Tensor,
-    edge_type: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Hidden states after gat2 + norm2 + gelu (before head)."""
-    import torch.nn.functional as F
-
-    feat_ys = model.ys_encoder(x)
-    feat_fs = model.fs_encoder(x)
-
-    h = model.ys_gat1(feat_ys, edge_index, edge_type)
-    h = model.dropout(F.gelu(model.ys_norm1(h)))
-    h = model.ys_gat2(h, edge_index, edge_type)
-    h_ys = model.dropout(F.gelu(model.ys_norm2(h)))
-
-    h = model.fs_gat1(feat_fs, edge_index, edge_type)
-    h = model.dropout(F.gelu(model.fs_norm1(h)))
-    h = model.fs_gat2(h, edge_index, edge_type)
-    h_fs = model.dropout(F.gelu(model.fs_norm2(h)))
-
-    return h_ys, h_fs

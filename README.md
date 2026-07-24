@@ -15,7 +15,7 @@
 | [`modelAll/`](modelAll/) | **全量 604 条** RGAT（`ysFs` YS+FS / `utsFs` UTS+FS） | [modelAll/README.md](modelAll/README.md) |
 | [`grd/`](grd/) | 冻结 GNN 下的 **全特征梯度反推** | [grd/README.md](grd/README.md) |
 | [`Pareto/`](Pareto/) | **NSGA-II 帕累托遗传逆设计**（目标 YS/FS → 30 维配方） | [Pareto/README.md](Pareto/README.md) |
-| [`symbolTorch/`](symbolTorch/) | GNN 蒸馏为 **可读符号公式**（SymTorch + PySR） | [symbolTorch/README.md](symbolTorch/README.md) |
+| [`symbolTorch/`](symbolTorch/) | GNN 蒸馏为 **可读符号公式**（SymTorch + PySR，仅 lowExp） | [symbolTorch/doc/](symbolTorch/doc/README.md) |
 
 典型流水线：
 
@@ -167,7 +167,7 @@ python -m preprocess.preprocess_datagnn_repro forward \
 
 ### F. 符号蒸馏（symbolTorch，可选）
 
-需 **Python ≥ 3.11** 单独环境，见 [symbolTorch/README.md](symbolTorch/README.md)。
+需 **Python ≥ 3.11** 单独环境，见 [symbolTorch/doc/](symbolTorch/doc/README.md)。
 
 ---
 

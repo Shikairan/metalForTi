@@ -5,13 +5,12 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 import torch
-import torch.nn as nn
 
-from .constants import DEFAULT_SLIME_PARAMS, FEATURE_NAMES
+from .constants import FEATURE_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -32,21 +31,20 @@ def build_sr_params(
     *,
     niterations: int,
     quick: bool,
-    low_exp: bool = False,
+    maxsize: int | None = None,
 ) -> Dict[str, Any]:
-    from .constants import DEFAULT_SR_PARAMS, DEFAULT_SR_PARAMS_LOW, QUICK_SR_PARAMS
+    from .constants import DEFAULT_SR_PARAMS, QUICK_SR_PARAMS
 
-    base = DEFAULT_SR_PARAMS_LOW if low_exp else DEFAULT_SR_PARAMS
-    params = dict(base)
+    params = dict(DEFAULT_SR_PARAMS)
     params["niterations"] = int(niterations)
+    if maxsize is not None:
+        params["maxsize"] = int(maxsize)
+    elif "maxsize" not in params:
+        params["maxsize"] = 40
     if quick:
         params.update(QUICK_SR_PARAMS)
+        params.setdefault("maxsize", 20)
     return params
-
-
-def build_fit_params(variable_names: Optional[List[str]] = None) -> Dict[str, Any]:
-    names = variable_names if variable_names is not None else list(FEATURE_NAMES)
-    return {"variable_names": names}
 
 
 def _equation_string(regressor) -> str:
@@ -66,70 +64,6 @@ def _equation_string(regressor) -> str:
     return str(regressor)
 
 
-def distill_block(
-    block: Union[nn.Module, Callable],
-    inputs: torch.Tensor,
-    *,
-    block_name: str,
-    parent_model: Optional[nn.Module] = None,
-    sr_params: Optional[Dict[str, Any]] = None,
-    max_output_dim: Optional[int] = None,
-    variable_names: Optional[List[str]] = None,
-    slime: bool = False,
-    slime_params: Optional[Dict[str, Any]] = None,
-    save_path: Optional[Path] = None,
-    resume_pt: Optional[Path] = None,
-):
-    """
-    Run SymTorch distill on a block. For multi-output modules, optionally limit dims.
-    Pass ``resume_pt`` to continue from a partially distilled SymbolicModel.
-    """
-    SymbolicModel = require_symtorch()
-    if isinstance(block, nn.Module):
-        block = block.cpu()
-    fit_params = build_fit_params(variable_names)
-    inp = inputs.detach().cpu().float()
-
-    sym: Any
-    if resume_pt is not None and resume_pt.is_file():
-        logger.info("Resuming symbolic block from %s", resume_pt)
-        sym = load_symbolic_module(resume_pt)
-    else:
-        sym = SymbolicModel(block, block_name=block_name)
-
-    _ = parent_model  # GNN teachers: always distill block I/O directly, not via parent hooks
-
-    n_dims = int(max_output_dim) if max_output_dim is not None else None
-    if n_dims is not None:
-        reg = sym.SLIME_pysr_regressor if slime else sym.pysr_regressor
-        start = max(reg.keys()) + 1 if reg else 0
-        for dim in range(start, n_dims):
-            logger.info("Distilling %s output_dim=%d", block_name, dim)
-            sym.distill(
-                inp,
-                output_dim=dim,
-                parent_model=None,
-                sr_params=sr_params,
-                fit_params=fit_params,
-                SLIME=slime,
-                slime_params=slime_params,
-                save_path=str(save_path) if save_path else None,
-            )
-    else:
-        sym.distill(
-            inp,
-            parent_model=None,
-            sr_params=sr_params,
-            fit_params=fit_params,
-            SLIME=slime,
-            slime_params=slime_params,
-            save_path=str(save_path) if save_path else None,
-        )
-
-    sym.switch_to_symbolic(SLIME=slime)
-    return sym
-
-
 def distill_block_on_numpy_io(
     block: Callable,
     x_np: np.ndarray,
@@ -137,42 +71,55 @@ def distill_block_on_numpy_io(
     block_name: str,
     sr_params: Optional[Dict[str, Any]] = None,
     variable_names: Optional[List[str]] = None,
-    slime: bool = False,
-    slime_params: Optional[Dict[str, Any]] = None,
+    save_path: Optional[Path | str] = None,
 ):
-    """Model-agnostic distill when inputs are not parent-model graph features."""
+    """Model-agnostic distill when inputs are not parent-model graph features.
+
+    save_path: PySR 输出根目录。SymTorch 会写入 ``{save_path}/{block_name}/``。
+    应传入本次运行目录下的路径（如 ``runs/<run>/SR_output``），避免不同 ckpt
+    共用 ``tabular_fs`` 等目录互相覆盖。
+    """
     SymbolicModel = require_symtorch()
     sym = SymbolicModel(block, block_name=block_name)
     fit_params = {}
     if variable_names:
         fit_params["variable_names"] = variable_names
-    sym.distill(
-        x_np,
-        sr_params=sr_params,
-        fit_params=fit_params or None,
-        SLIME=slime,
-        slime_params=slime_params,
-    )
-    sym.switch_to_symbolic(SLIME=slime)
+    distill_kwargs: Dict[str, Any] = {
+        "sr_params": sr_params,
+        "fit_params": fit_params or None,
+    }
+    if save_path is not None:
+        distill_kwargs["save_path"] = str(Path(save_path))
+    sym.distill(x_np, **distill_kwargs)
+    sym.switch_to_symbolic()
     return sym
 
 
-def export_equations_json(sym, out_path: Path, *, slime: bool = False) -> Dict[str, Any]:
-    """Serialize equation strings per output dimension."""
-    reg = sym.SLIME_pysr_regressor if slime else sym.pysr_regressor
-    payload: Dict[str, Any] = {"block_name": sym.block_name, "slime": slime, "equations": {}}
+def export_equations_json(sym, out_path: Path, *, target: Optional[str] = None) -> Dict[str, Any]:
+    """Serialize equation strings；并写出完整可读方程字段。"""
+    from .equation_format import enrich_and_write_equation_json
+
+    reg = sym.pysr_regressor
+    # 取第 0 维（lowExp 单输出）
+    raw = ""
     for dim, model in sorted(reg.items(), key=lambda kv: kv[0]):
-        payload["equations"][str(dim)] = _equation_string(model)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
-    return payload
+        if int(dim) == 0 or raw == "":
+            raw = _equation_string(model)
+            if int(dim) == 0:
+                break
+    tgt = target or ("YS" if "ys" in str(sym.block_name).lower() else "FS")
+    return enrich_and_write_equation_json(
+        out_path,
+        target=tgt,
+        block_name=str(sym.block_name),
+        raw_expr=raw,
+    )
 
 
-def save_symbolic_module(sym, path: Path) -> None:
+def save_symbolic_module(sym, path: Path, *, target: Optional[str] = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     json_path = path.with_name(path.stem + ".json")
-    export_equations_json(sym, json_path)
+    export_equations_json(sym, json_path, target=target)
     try:
         import dill  # noqa: WPS433
 
@@ -180,25 +127,6 @@ def save_symbolic_module(sym, path: Path) -> None:
             dill.dump(sym, f)
     except Exception as exc:
         logger.warning("Could not pickle %s (%s). Equations saved to %s", path, exc, json_path)
-
-
-def load_symbolic_module(path: Path):
-    import dill  # noqa: WPS433
-
-    if not path.is_file():
-        alt = path.with_suffix(".json")
-        raise FileNotFoundError(
-            f"Missing symbolic checkpoint: {path}\n"
-            f"Re-run distillation or provide equations-only file: {alt}"
-        )
-    with path.open("rb") as f:
-        return dill.load(f)
-
-
-def try_load_symbolic_module(path: Path):
-    if path.is_file():
-        return load_symbolic_module(path)
-    return None
 
 
 def make_tabular_lookup_fn(x_ref: np.ndarray, y_ref: np.ndarray) -> Callable:
@@ -217,9 +145,3 @@ def make_tabular_lookup_fn(x_ref: np.ndarray, y_ref: np.ndarray) -> Callable:
     return f
 
 
-def build_slime_params(x0: np.ndarray, overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    params = dict(DEFAULT_SLIME_PARAMS)
-    params["x"] = np.asarray(x0, dtype=np.float32)
-    if overrides:
-        params.update(overrides)
-    return params

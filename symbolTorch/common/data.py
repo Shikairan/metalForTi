@@ -11,24 +11,26 @@ import torch
 def load_graph_bundle(data_dir: Path):
     graph_path = data_dir / "material_graph.pt"
     ys_path = data_dir / "ys.pt"
+    uts_path = data_dir / "uts.pt"
     fs_path = data_dir / "fs.pt"
     train_mask_path = data_dir / "train_mask.pt"
     val_mask_path = data_dir / "val_mask.pt"
 
-    missing = [p for p in (graph_path, ys_path, fs_path) if not p.is_file()]
+    label0_path = ys_path if ys_path.is_file() else uts_path
+    missing = [p for p in (graph_path, label0_path, fs_path) if not p.is_file()]
     if missing:
         hint = (
             f"Missing data under {data_dir}.\n"
+            "Need material_graph.pt, fs.pt, and ys.pt or uts.pt (+ masks).\n"
             "Generate with:\n"
             "  cd metalForTi/gnnDir\n"
             "  python regenerate_rgnnpt.py\n"
-            "  # or: python rgcn_dataloader.py --csv datagnn.csv "
-            "--out-graph gnndataPT/r-gatPT/material_graph.pt ...\n"
+            "  # or modelAll/*/build_data.py\n"
         )
         raise FileNotFoundError(f"{missing[0]}\n{hint}")
 
     graph = torch.load(graph_path, map_location="cpu", weights_only=False)
-    ys = torch.load(ys_path, map_location="cpu", weights_only=False).reshape(-1).float()
+    ys = torch.load(label0_path, map_location="cpu", weights_only=False).reshape(-1).float()
     fs = torch.load(fs_path, map_location="cpu", weights_only=False).reshape(-1).float()
 
     if train_mask_path.is_file() and val_mask_path.is_file():
