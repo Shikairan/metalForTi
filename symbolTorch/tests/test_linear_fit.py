@@ -12,8 +12,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.linear_fit import (  # noqa: E402
+    MIN_LINEAR_COEF_ABS,
     compute_teacher_residual,
+    enforce_min_coefficient_magnitude,
     fit_linear_teacher,
+    linear_json_with_min_coef,
     predict_linear,
 )
 
@@ -31,6 +34,28 @@ def test_ridge_recovers_linear():
     # replay
     pred2 = fit.intercept + X @ fit.coefficients
     assert np.allclose(pred, pred2)
+
+
+def test_enforce_min_coefficient_magnitude():
+    coef = [0.0, -1e-18, 2e-7, -0.5, 1e-5]
+    out = enforce_min_coefficient_magnitude(coef, min_abs=1e-6)
+    assert out[0] == 1e-6
+    assert out[1] == -1e-6
+    assert out[2] == 1e-6
+    assert out[3] == -0.5
+    assert out[4] == 1e-5
+
+
+def test_linear_json_with_min_coef():
+    lin = {
+        "intercept": 1.0,
+        "coefficients": [0.0] * 30,
+        "feature_names": [f"v{i}" for i in range(30)],
+    }
+    out = linear_json_with_min_coef(lin)
+    assert all(abs(c) >= MIN_LINEAR_COEF_ABS for c in out["coefficients"])
+    assert "equation_rhs_raw" in out
+    assert "min_coefficient_abs" in out
 
 
 def test_ols_and_json_fields():

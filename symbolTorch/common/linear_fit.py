@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 DEFAULT_RIDGE_ALPHAS = (1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0)
+MIN_LINEAR_COEF_ABS = 1e-6
 
 
 @dataclass
@@ -30,13 +31,8 @@ class LinearFitResult:
         coef = np.asarray(self.coefficients, dtype=np.float64).reshape(-1)
         if len(coef) != len(feature_names):
             raise ValueError("coefficients length != feature_names")
-        terms = [
-            f"({c:.16g})*{name}" for c, name in zip(coef.tolist(), feature_names)
-        ]
-        rhs_raw = " + ".join([f"({self.intercept:.16g})"] + terms)
-        rhs_display = " + ".join(
-            [f"{self.intercept:.8g}"]
-            + [f"({c:.8g})*{n}" for c, n in zip(coef.tolist(), feature_names)]
+        rhs_raw, rhs_display = build_linear_equation_strings(
+            self.intercept, coef, feature_names
         )
         return {
             "intercept": float(self.intercept),
@@ -56,6 +52,57 @@ class LinearFitResult:
             "equation_rhs_raw": rhs_raw,
             "equation_rhs_display": rhs_display,
         }
+
+
+def enforce_min_coefficient_magnitude(
+    coefficients: Sequence[float],
+    *,
+    min_abs: float = MIN_LINEAR_COEF_ABS,
+) -> np.ndarray:
+    """Ensure every linear coefficient has |c| >= min_abs (zero -> +min_abs)."""
+    if min_abs <= 0:
+        raise ValueError(f"min_abs must be > 0, got {min_abs}")
+    coef = np.asarray(coefficients, dtype=np.float64).reshape(-1)
+    out = coef.copy()
+    for i in range(out.size):
+        if abs(out[i]) < min_abs:
+            out[i] = min_abs if out[i] >= 0.0 else -min_abs
+    return out
+
+
+def build_linear_equation_strings(
+    intercept: float,
+    coefficients: Sequence[float],
+    feature_names: Sequence[str],
+) -> Tuple[str, str]:
+    coef = np.asarray(coefficients, dtype=np.float64).reshape(-1)
+    if len(coef) != len(feature_names):
+        raise ValueError("coefficients length != feature_names")
+    terms = [f"({c:.16g})*{name}" for c, name in zip(coef.tolist(), feature_names)]
+    rhs_raw = " + ".join([f"({float(intercept):.16g})"] + terms)
+    rhs_display = " + ".join(
+        [f"{float(intercept):.8g}"]
+        + [f"({c:.8g})*{n}" for c, n in zip(coef.tolist(), feature_names)]
+    )
+    return rhs_raw, rhs_display
+
+
+def linear_json_with_min_coef(
+    lin_json: Dict[str, Any],
+    *,
+    min_abs: float = MIN_LINEAR_COEF_ABS,
+) -> Dict[str, Any]:
+    """Copy linear JSON dict with floored coefficient magnitudes and rebuilt equations."""
+    feature_names = list(lin_json["feature_names"])
+    intercept = float(lin_json["intercept"])
+    coef = enforce_min_coefficient_magnitude(lin_json["coefficients"], min_abs=min_abs)
+    rhs_raw, rhs_display = build_linear_equation_strings(intercept, coef, feature_names)
+    out = dict(lin_json)
+    out["coefficients"] = coef.tolist()
+    out["equation_rhs_raw"] = rhs_raw
+    out["equation_rhs_display"] = rhs_display
+    out["min_coefficient_abs"] = float(min_abs)
+    return out
 
 
 def _as_2d_float64(x: np.ndarray) -> np.ndarray:

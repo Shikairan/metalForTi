@@ -38,7 +38,7 @@ from common.expr_ir import (  # noqa: E402
     serialize_expression_ir,
     validate_expression_tree,
 )
-from common.liner_io import load_and_validate_liner_run  # noqa: E402
+from common.linear_fit import linear_json_with_min_coef  # noqa: E402
 from common.manifest import (  # noqa: E402
     assert_compatible_manifests,
     has_success_marker,
@@ -184,6 +184,9 @@ def run_comb(args: argparse.Namespace) -> Path:
     with (liner_run / "linear_fs.json").open("r", encoding="utf-8") as f:
         lin_fs = json.load(f)
 
+    lin_h0_export = linear_json_with_min_coef(lin_h0)
+    lin_fs_export = linear_json_with_min_coef(lin_fs)
+
     linear_expr_h0 = build_linear_sympy_expr(
         lin_h0["intercept"], lin_h0["coefficients"], FEATURE_NAMES
     )
@@ -227,9 +230,19 @@ def run_comb(args: argparse.Namespace) -> Path:
             f"(max abs={np.max(np.abs(formula_fs - combined_fs))})"
         )
 
+    export_linear_expr_h0 = build_linear_sympy_expr(
+        lin_h0_export["intercept"], lin_h0_export["coefficients"], FEATURE_NAMES
+    )
+    export_linear_expr_fs = build_linear_sympy_expr(
+        lin_fs_export["intercept"], lin_fs_export["coefficients"], FEATURE_NAMES
+    )
+    export_combined_expr_h0 = combine_linear_residual(export_linear_expr_h0, resid_expr_h0)
+    export_combined_expr_fs = combine_linear_residual(export_linear_expr_fs, resid_expr_fs)
+
     codec = codec_stats_dict()
     final_equations = {
         "evaluator_version": EVALUATOR_VERSION,
+        "min_linear_coefficient_abs": lin_h0_export["min_coefficient_abs"],
         "feature_names": list(FEATURE_NAMES),
         "heads": {},
         "codec": codec,
@@ -246,9 +259,9 @@ def run_comb(args: argparse.Namespace) -> Path:
         },
         "units": {"YS": "MPa", "UTS": "MPa", "FS_dataOri2": "% elongation scale", "FS_data1123": "data1123 FS"},
     }
-    for head, lin, resid_raw, comb_expr, lin_json in (
-        (head0, lin_h0, raw_h0, combined_expr_h0, lin_h0),
-        (head1, lin_fs, raw_fs, combined_expr_fs, lin_fs),
+    for head, resid_raw, comb_expr, lin_json in (
+        (head0, raw_h0, export_combined_expr_h0, lin_h0_export),
+        (head1, raw_fs, export_combined_expr_fs, lin_fs_export),
     ):
         final_equations["heads"][head] = {
             "target": head,
@@ -283,7 +296,7 @@ def run_comb(args: argparse.Namespace) -> Path:
         "### Linear",
         "",
         "```text",
-        f"L = {lin_h0['equation_rhs_display']}",
+        f"L = {lin_h0_export['equation_rhs_display']}",
         "```",
         "",
         "### Residual",
@@ -301,7 +314,7 @@ def run_comb(args: argparse.Namespace) -> Path:
         "### Linear",
         "",
         "```text",
-        f"L = {lin_fs['equation_rhs_display']}",
+        f"L = {lin_fs_export['equation_rhs_display']}",
         "```",
         "",
         "### Residual",
