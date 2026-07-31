@@ -26,3 +26,20 @@ modelAll/**/runs/
 # 历史 mask / 终端转储
 **/mask_round_history/
 **/runs/train_stdout.log
+
+# symbolTorch 蒸馏运行目录（仅跟踪 RUN_REPORT 与关键公式/误差产物）
+symbolTorch/**/runs/
+!symbolTorch/comb/VERIFY.md
+!symbolTorch/comb/runs/full_*/RUN_REPORT.md
+!symbolTorch/comb/runs/full_*/final_equations.json
+!symbolTorch/comb/runs/full_*/final_equations_model_space.md
+!symbolTorch/comb/runs/full_*/final_equations_physical.md
+!symbolTorch/comb/runs/full_*/linear_equations.md
+!symbolTorch/comb/runs/full_*/residual_equations.md
+!symbolTorch/comb/runs/full_*/per_sample_errors.csv
+!symbolTorch/comb/runs/full_*/per_sample_errors.json
+!symbolTorch/comb/runs/full_*/metrics.json
+!symbolTorch/comb/runs/full_*/manifest.json
+!symbolTorch/comb/runs/full_*/summary.md
+symbolTorch/**/runs/**/*.log
+symbolTorch/logs/

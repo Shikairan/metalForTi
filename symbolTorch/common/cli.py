@@ -127,15 +127,34 @@ def update_latest_symlink(runs_root: Path, run_dir: Path) -> None:
         pass
 
 
+def finalize_run_success(runs_root: Path | None, out_dir: Path) -> None:
+    """Write _SUCCESS and update runs/latest only after a successful run.
+
+    If ``out_dir`` was created under ``runs_root``, latest points at it.
+    If ``runs_root`` is None, infer ``out_dir.parent`` when it is named ``runs``.
+    """
+    from .manifest import write_success_marker
+
+    out_dir = Path(out_dir)
+    write_success_marker(out_dir)
+    root = Path(runs_root) if runs_root is not None else out_dir.parent
+    if root.name == "runs" and out_dir.parent.resolve() == root.resolve():
+        update_latest_symlink(root, out_dir)
+
+
 def resolve_out_dir(args: argparse.Namespace, experiment_dir: Path) -> Path:
     """
     输出路径规则：
     - 若指定 --out-dir：原样使用
     - 否则：experiment/runs/<run-name>/
       run-name 来自 --run-name，或自动生成时间戳目录（不覆盖旧结果）
+
+    注意：不再在创建时更新 latest；成功结束后调用 finalize_run_success。
     """
     if args.out_dir is not None:
-        return Path(args.out_dir)
+        out = Path(args.out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        return out
 
     runs_root = experiment_dir / "runs"
     runs_root.mkdir(parents=True, exist_ok=True)
@@ -151,7 +170,6 @@ def resolve_out_dir(args: argparse.Namespace, experiment_dir: Path) -> Path:
                 break
             k += 1
     out.mkdir(parents=True, exist_ok=True)
-    update_latest_symlink(runs_root, out)
     return out
 
 

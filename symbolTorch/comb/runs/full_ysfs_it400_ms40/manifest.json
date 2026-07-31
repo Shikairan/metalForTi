@@ -1,0 +1,31 @@
+{
+  "module": "comb",
+  "run_id": "full_ysfs_it400_ms40",
+  "liner_run": "/home/data/metalgnn/metalForTi/symbolTorch/comb/runs/full_ysfs_it400_ms40/liner_stage",
+  "lowexp_run": "/home/data/metalgnn/metalForTi/symbolTorch/comb/runs/full_ysfs_it400_ms40/lowexp_stage",
+  "fingerprint": "e3eda163cc76d22eb8d9c4a155856f0e",
+  "csv": "/home/data/metalgnn/metalForTi/gnnDir/datacsv/datagnnUts.csv",
+  "data_dir": "/home/data/metalgnn/metalForTi/modelAll/ysFs/data",
+  "ckpt": "/home/data/metalgnn/metalForTi/modelAll/ysFs/runs/best_rgat_full.pt",
+  "head0_name": "YS",
+  "head1_name": "FS",
+  "feature_order_hash": "8cf195718c295f40",
+  "train_mask_hash": "9e42ef34e56997b0",
+  "val_mask_hash": "cb217a492cd3edd7",
+  "seed": 42,
+  "codec": {
+    "T_DIV": 800.0,
+    "testenv_mean": [
+      194.7433774834437,
+      1342.7152317880796
+    ],
+    "testenv_std": [
+      214.62536752046483,
+      1547.0319516107018
+    ],
+    "mean_YS": 965.7821034430465,
+    "mean_FS_dataOri2": 28.120464644701983,
+    "mean_UTS": 1291.9939771048014,
+    "FS_DATA1123_TO_DATAORI2_SCALE": 100.0
+  }
+}

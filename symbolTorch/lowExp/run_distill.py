@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""lowExp: tabular symbolic x -> YS/FS (no graph at inference)."""
+"""lowExp: symbolic regression on liner teacher residuals (graph-free)."""
 
 from __future__ import annotations
 
 import os
 
-# symtorch 会对符号 forward 做 torch.compile，CPU 上需要 g++；无编译器时禁用 dynamo
 os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
 
 import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 import numpy as np
 import torch
@@ -20,168 +20,302 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.cli import add_common_args, experiment_header, resolve_device, resolve_out_dir, set_seed  # noqa: E402
+from common.alignment import duplicate_input_groups  # noqa: E402
+from common.cli import (  # noqa: E402
+    add_common_args,
+    experiment_header,
+    finalize_run_success,
+    resolve_device,
+    resolve_out_dir,
+    set_seed,
+)
 from common.constants import FEATURE_NAMES  # noqa: E402
-from common.data import bundle_to_device, load_graph_bundle  # noqa: E402
 from common.distill_io import (  # noqa: E402
     build_sr_params,
-    distill_block_on_numpy_io,
+    distill_residual_targets,
+    evaluate_symbolic_numpy,
     export_equations_json,
-    make_tabular_lookup_fn,
+    get_selected_sympy_expr,
     save_symbolic_module,
 )
 from common.equation_format import build_equation_record, write_equations_markdown  # noqa: E402
-from common.hybrid_models import TabularSymbolicModel  # noqa: E402
-from common.metrics import evaluate_predictions, save_metrics, write_summary_md  # noqa: E402
-from common.teacher import load_teacher, teacher_forward  # noqa: E402
+from common.expr_ir import validate_expression_tree  # noqa: E402
+from common.liner_io import load_and_validate_liner_run  # noqa: E402
+from common.manifest import save_manifest  # noqa: E402
+from common.metrics import (  # noqa: E402
+    assert_finite,
+    distillation_metrics,
+    save_metrics,
+    write_summary_md,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("lowExp")
 
 
-def main() -> None:
-    experiment_header("lowExp")
-    p = argparse.ArgumentParser(description="lowExp: tabular symbolic model (graph-free)")
-    add_common_args(p)
-    args = p.parse_args()
+def run_lowexp(args: argparse.Namespace) -> Path:
     set_seed(args.seed)
-
-    out_dir = resolve_out_dir(args, Path(__file__).resolve().parent)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    experiment_dir = Path(__file__).resolve().parent
+    out_dir = resolve_out_dir(args, experiment_dir)
     logger.info("本次输出目录: %s", out_dir.resolve())
-    device = resolve_device(args.device)
+    _ = resolve_device(args.device)  # reserved for future GPU symbolic eval
 
-    graph, ys, fs, train_mask, val_mask = load_graph_bundle(args.data_dir)
-    x, ys, fs, train_mask, val_mask, edge_index, edge_type = bundle_to_device(
-        graph, ys, fs, train_mask, val_mask, device
-    )
-    in_dim = int(x.shape[1])
+    if not getattr(args, "liner_run", None):
+        raise ValueError("lowExp residual mode requires --liner-run <liner/runs/...>")
 
-    teacher = load_teacher(
-        args.ckpt,
-        in_dim=in_dim,
-        hidden_dim=args.hidden_dim,
-        device=device,
-        dropout=args.dropout,
-    )
+    payload = load_and_validate_liner_run(Path(args.liner_run))
+    head0 = payload.head0_name
+    head1 = payload.head1_name
+    X_all = payload.X_all
+    train_mask = payload.train_mask
+    val_mask = payload.val_mask
+    X_train = X_all[train_mask]
 
-    sample_mask = train_mask | val_mask if args.include_val else train_mask
-    x_sample = x[sample_mask]
-    x_np = x_sample.detach().cpu().numpy()
-
-    with torch.no_grad():
-        t_ys, t_fs = teacher_forward(teacher, x, edge_index, edge_type)
-    ys_np = t_ys[sample_mask].detach().cpu().numpy()
-    fs_np = t_fs[sample_mask].detach().cpu().numpy()
-
-    torch.save(
-        {"ys_teacher": t_ys.cpu(), "fs_teacher": t_fs.cpu(), "x": x.cpu()},
-        out_dir / "teacher_predictions.pt",
-    )
+    if getattr(args, "include_val", False):
+        logger.warning(
+            "--include-val is ignored in residual mode; fitting uses train_mask only. "
+            "Results remain independently validated on val_mask."
+        )
 
     sr_params = build_sr_params(
         niterations=args.sr_niterations,
         quick=args.quick,
         maxsize=(20 if args.quick else args.sr_maxsize),
     )
-
-    data_dir = Path(args.data_dir)
-    head0 = args.head0_name or ("UTS" if (data_dir / "uts.pt").is_file() and not (data_dir / "ys.pt").is_file() else "YS")
-    head1 = args.head1_name or "FS"
-    logger.info("方程目标名: %s / %s | SR niterations=%s maxsize=%s", head0, head1, sr_params.get("niterations"), sr_params.get("maxsize"))
-
-    fn_ys = make_tabular_lookup_fn(x_np, ys_np)
-    fn_fs = make_tabular_lookup_fn(x_np, fs_np)
     sr_out_root = out_dir / "SR_output"
     sr_out_root.mkdir(parents=True, exist_ok=True)
-    logger.info("PySR 输出目录: %s/<block_name>/", sr_out_root.resolve())
+    logger.info(
+        "Residual SR %s/%s | niterations=%s maxsize=%s | liner=%s",
+        head0,
+        head1,
+        sr_params.get("niterations"),
+        sr_params.get("maxsize"),
+        payload.run_dir,
+    )
 
-    logger.info("Distilling tabular %s", head0)
-    sym_ys = distill_block_on_numpy_io(
-        fn_ys,
-        x_np,
-        block_name=f"tabular_{head0.lower()}",
-        sr_params=sr_params,
+    logger.info("Distilling residual %s", head0)
+    sym_h0 = distill_residual_targets(
+        X_train,
+        payload.residual_head0[train_mask],
+        block_name=f"residual_{head0.lower()}",
         variable_names=list(FEATURE_NAMES),
+        sr_params=sr_params,
         save_path=sr_out_root,
     )
-    ys_payload = export_equations_json(sym_ys, out_dir / f"{head0.lower()}_tabular_sym.json", target=head0)
-    save_symbolic_module(sym_ys, out_dir / f"{head0.lower()}_tabular_sym.pt", target=head0)
+    h0_payload = export_equations_json(
+        sym_h0, out_dir / f"{head0.lower()}_residual_sym.json", target=f"R_{head0}"
+    )
+    save_symbolic_module(
+        sym_h0, out_dir / f"{head0.lower()}_residual_sym.pt", target=f"R_{head0}"
+    )
 
-    logger.info("Distilling tabular %s", head1)
-    sym_fs = distill_block_on_numpy_io(
-        fn_fs,
-        x_np,
-        block_name=f"tabular_{head1.lower()}",
-        sr_params=sr_params,
+    logger.info("Distilling residual %s", head1)
+    sym_fs = distill_residual_targets(
+        X_train,
+        payload.residual_fs[train_mask],
+        block_name=f"residual_{head1.lower()}",
         variable_names=list(FEATURE_NAMES),
+        sr_params=sr_params,
         save_path=sr_out_root,
     )
-    fs_payload = export_equations_json(sym_fs, out_dir / f"{head1.lower()}_tabular_sym.json", target=head1)
-    save_symbolic_module(sym_fs, out_dir / f"{head1.lower()}_tabular_sym.pt", target=head1)
+    fs_payload = export_equations_json(
+        sym_fs, out_dir / f"{head1.lower()}_residual_sym.json", target=f"R_{head1}"
+    )
+    save_symbolic_module(
+        sym_fs, out_dir / f"{head1.lower()}_residual_sym.pt", target=f"R_{head1}"
+    )
+
+    # validate sympy trees
+    expr_h0 = get_selected_sympy_expr(sym_h0)
+    expr_fs = get_selected_sympy_expr(sym_fs)
+    validate_expression_tree(expr_h0, allowed_symbols=FEATURE_NAMES)
+    validate_expression_tree(expr_fs, allowed_symbols=FEATURE_NAMES)
+
+    rhat_h0 = evaluate_symbolic_numpy(sym_h0, X_all)
+    rhat_fs = evaluate_symbolic_numpy(sym_fs, X_all)
+    assert_finite("symbolic_residual_head0", rhat_h0)
+    assert_finite("symbolic_residual_fs", rhat_fs)
+    if rhat_h0.shape[0] != X_all.shape[0] or rhat_fs.shape[0] != X_all.shape[0]:
+        raise ValueError("symbolic residual shape mismatch")
+
+    # train/val/all finite already via assert_finite on all
+    for split, mask in (
+        ("train", train_mask),
+        ("val", val_mask),
+        ("all", np.ones(X_all.shape[0], dtype=bool)),
+    ):
+        assert_finite(f"rhat_h0_{split}", rhat_h0[mask])
+        assert_finite(f"rhat_fs_{split}", rhat_fs[mask])
+
+    group_id, counts, dup_summary = duplicate_input_groups(X_all)
+    irr = {}
+    for name, resid in ((head0, payload.residual_head0), (head1, payload.residual_fs)):
+        vars_ = []
+        for g in range(int(counts.shape[0])):
+            if counts[g] <= 1:
+                continue
+            idx = np.where(group_id == g)[0]
+            vars_.append(float(np.var(resid[idx])))
+        irr[name] = {
+            "mean_within_group_residual_var": float(np.mean(vars_)) if vars_ else 0.0,
+            "max_within_group_residual_var": float(np.max(vars_)) if vars_ else 0.0,
+        }
 
     eq_records = [
-        build_equation_record(head0, ys_payload["equation_raw"], block_name=f"tabular_{head0.lower()}"),
-        build_equation_record(head1, fs_payload["equation_raw"], block_name=f"tabular_{head1.lower()}"),
+        build_equation_record(
+            f"R_{head0}", h0_payload["equation_raw"], block_name=f"residual_{head0.lower()}"
+        ),
+        build_equation_record(
+            f"R_{head1}", fs_payload["equation_raw"], block_name=f"residual_{head1.lower()}"
+        ),
     ]
     write_equations_markdown(
-        out_dir / "equations.md",
+        out_dir / "residual_equations.md",
         eq_records,
+        title="lowExp residual equations",
         notes=[
-            f"量纲与标签 pt 一致（模型量纲）；第一头={head0}，第二头={head1}。",
+            "拟合目标为 teacher - linear（liner 残差），不是完整教师输出或真实标签。",
             "推理仅使用节点 30 维特征，不使用图邻居。",
-            f"SR: niterations={sr_params.get('niterations')} maxsize={sr_params.get('maxsize')}。",
-            f"ckpt={args.ckpt} | data-dir={args.data_dir}",
+            f"SLIME=False | SR niterations={sr_params.get('niterations')} maxsize={sr_params.get('maxsize')}",
+            f"liner_run={payload.run_dir}",
+            f"liner_fingerprint={payload.manifest.get('fingerprint')}",
         ],
     )
 
-    tabular = TabularSymbolicModel(sym_ys, sym_fs).eval()
-    with torch.no_grad():
-        s_ys, s_fs = tabular(x)
+    torch.save(
+        {
+            "symbolic_residual_head0": torch.from_numpy(rhat_h0),
+            "symbolic_residual_fs": torch.from_numpy(rhat_fs),
+            "sample_id": torch.from_numpy(payload.sample_id),
+            "head0_name": head0,
+            "head1_name": head1,
+            "liner_fingerprint": payload.manifest["fingerprint"],
+        },
+        out_dir / "residual_predictions.pt",
+    )
 
-    teacher_metrics = evaluate_predictions(t_ys, t_fs, ys, fs, train_mask, val_mask)
-    tabular_metrics = evaluate_predictions(s_ys, s_fs, ys, fs, train_mask, val_mask)
-    metrics = {
+    lowexp_manifest: Dict[str, Any] = {
+        "module": "lowExp",
+        "run_id": out_dir.name,
+        "liner_run": str(payload.run_dir),
+        "liner_fingerprint": payload.manifest["fingerprint"],
+        "csv": payload.manifest.get("csv"),
+        "data_dir": payload.manifest.get("data_dir"),
+        "ckpt": payload.manifest.get("ckpt"),
+        "head0_name": head0,
+        "head1_name": head1,
+        "feature_names": list(FEATURE_NAMES),
+        "feature_order_hash": payload.manifest.get("feature_order_hash"),
+        "train_mask_hash": payload.manifest.get("train_mask_hash"),
+        "val_mask_hash": payload.manifest.get("val_mask_hash"),
+        "fingerprint": payload.manifest["fingerprint"],
+        "seed": int(args.seed),
+        "sr": {
+            "niterations": sr_params.get("niterations"),
+            "maxsize": sr_params.get("maxsize"),
+            "quick": bool(args.quick),
+            "SLIME": False,
+        },
+        "duplicate_inputs": dup_summary,
+        "irreducible_residual": irr,
+        "residual_equation_raw": {
+            head0: h0_payload["equation_raw"],
+            head1: fs_payload["equation_raw"],
+        },
+    }
+    save_manifest(out_dir / "manifest.json", lowexp_manifest)
+
+    metrics: Dict[str, Any] = {
         "experiment": "lowExp",
+        "mode": "residual",
         "graph_at_inference": False,
         "head0_name": head0,
         "head1_name": head1,
-        "ckpt": str(Path(args.ckpt).resolve()),
-        "data_dir": str(data_dir.resolve()),
-        "sr": {"niterations": sr_params.get("niterations"), "maxsize": sr_params.get("maxsize"), "quick": bool(args.quick)},
-        "teacher": teacher_metrics,
-        "tabular_symbolic": tabular_metrics,
-        "graph_info_loss_val_mae_head0": tabular_metrics["val_mae_ys"] - teacher_metrics["val_mae_ys"],
-        "graph_info_loss_val_mae_head1": tabular_metrics["val_mae_fs"] - teacher_metrics["val_mae_fs"],
-        # 兼容旧字段名
-        "graph_info_loss_val_mae_ys": tabular_metrics["val_mae_ys"] - teacher_metrics["val_mae_ys"],
-        "graph_info_loss_val_mae_fs": tabular_metrics["val_mae_fs"] - teacher_metrics["val_mae_fs"],
+        "liner_run": str(payload.run_dir),
+        "liner_fingerprint": payload.manifest["fingerprint"],
+        "sr": lowexp_manifest["sr"],
         "equations": {
-            head0: ys_payload["equation"],
-            head1: fs_payload["equation"],
+            f"R_{head0}": h0_payload["equation"],
+            f"R_{head1}": fs_payload["equation"],
+        },
+        "variables_used": {
+            head0: h0_payload.get("variables_used"),
+            head1: fs_payload.get("variables_used"),
         },
     }
+    metrics.update(
+        distillation_metrics(
+            teacher=payload.teacher_head0,
+            linear=payload.linear_head0,
+            residual_true=payload.residual_head0,
+            residual_pred=rhat_h0,
+            combined=payload.linear_head0 + rhat_h0,
+            label=payload.label_head0,
+            train_mask=train_mask,
+            val_mask=val_mask,
+            head="head0",
+        )
+    )
+    metrics.update(
+        distillation_metrics(
+            teacher=payload.teacher_fs,
+            linear=payload.linear_fs,
+            residual_true=payload.residual_fs,
+            residual_pred=rhat_fs,
+            combined=payload.linear_fs + rhat_fs,
+            label=payload.label_fs,
+            train_mask=train_mask,
+            val_mask=val_mask,
+            head="fs",
+        )
+    )
     save_metrics(out_dir / "metrics.json", metrics)
     write_summary_md(
         out_dir / "summary.md",
-        "lowExp",
+        "lowExp residual",
         [
-            f"Tabular symbolic: x (30) -> {head0} / {head1}",
-            "No graph structure at inference",
-            f"ckpt: {args.ckpt}",
-            f"Val MAE tabular {head0}/{head1}: {tabular_metrics['val_mae_ys']:.4f} / {tabular_metrics['val_mae_fs']:.4f}",
-            f"Graph info loss (tabular - teacher) val MAE: "
-            f"{metrics['graph_info_loss_val_mae_ys']:.4f} / {metrics['graph_info_loss_val_mae_fs']:.4f}",
+            f"Symbolic residual: x(30) -> R_{head0} / R_{head1}",
+            f"liner: {payload.run_dir}",
+            f"Val MAE sym residual vs teacher residual: "
+            f"{metrics.get('val_mae_sym_residual_head0')} / "
+            f"{metrics.get('val_mae_sym_residual_fs')}",
+            f"Val distillation MAE (linear+R vs teacher): "
+            f"{metrics.get('distillation_mae_val_head0')} / "
+            f"{metrics.get('distillation_mae_val_fs')}",
             "",
-            "## 完整方程（亦见 equations.md）",
+            "## Residual equations",
             "",
             "```text",
-            ys_payload["equation"],
+            h0_payload["equation"],
             fs_payload["equation"],
             "```",
         ],
     )
-    logger.info("Done. Outputs in %s (see equations.md)", out_dir)
+
+    runs_root = experiment_dir / "runs"
+    finalize_run_success(runs_root if out_dir.parent == runs_root else None, out_dir)
+    logger.info("Done. Outputs in %s", out_dir)
+    return out_dir
+
+
+def build_argparser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="lowExp: symbolic residual model (requires --liner-run)"
+    )
+    add_common_args(p)
+    p.add_argument(
+        "--liner-run",
+        type=Path,
+        required=True,
+        help="Path to successful liner/runs/<id> (must contain residual_targets.pt + _SUCCESS)",
+    )
+    return p
+
+
+def main(argv: Optional[list] = None) -> None:
+    experiment_header("lowExp")
+    args = build_argparser().parse_args(argv)
+    run_lowexp(args)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,51 @@
+{
+  "module": "comb",
+  "run_id": "full_utsFsAll_it400_ms40",
+  "liner_run": "/home/data/metalgnn/metalForTi/symbolTorch/comb/runs/full_utsFsAll_it400_ms40/liner_stage",
+  "lowexp_run": "/home/data/metalgnn/metalForTi/symbolTorch/comb/runs/full_utsFsAll_it400_ms40/lowexp_stage",
+  "fingerprint": "19881268f0e9667fcdf863d6fc60dfbb",
+  "csv": "/home/data/metalgnn/metalForTi/gnnDir/datacsv/datagnnUts.csv",
+  "data_dir": "/home/data/metalgnn/metalForTi/modelAll/utsFsAll/data",
+  "ckpt": "/home/data/metalgnn/metalForTi/modelAll/utsFsAll/runs/best_rgat_uts_fs_all.pt",
+  "head0_name": "UTS",
+  "head1_name": "FS",
+  "feature_order_hash": "8cf195718c295f40",
+  "train_mask_hash": "7cfbd04857c27efb",
+  "val_mask_hash": "7cfbd04857c27efb",
+  "seed": 42,
+  "codec": {
+    "T_DIV": 800.0,
+    "testenv_mean": [
+      194.7433774834437,
+      1342.7152317880796
+    ],
+    "testenv_std": [
+      214.62536752046483,
+      1547.0319516107018
+    ],
+    "mean_YS": 965.7821034430465,
+    "mean_FS_dataOri2": 28.120464644701983,
+    "mean_UTS": 1291.9939771048014,
+    "FS_DATA1123_TO_DATAORI2_SCALE": 100.0
+  },
+  "independent_val": false,
+  "full_train_mode": true,
+  "per_sample_errors": {
+    "n_samples": 604,
+    "head0_name": "UTS",
+    "head1_name": "FS",
+    "full_train_mode": true,
+    "mean_abs_err_linear_vs_teacher": {
+      "UTS": 0.11417714806836408,
+      "FS": 0.26645548244353356
+    },
+    "mean_abs_err_combined_vs_teacher": {
+      "UTS": 0.08945382477417667,
+      "FS": 0.21890698396444935
+    },
+    "mean_abs_err_residual_pred_vs_true": {
+      "UTS": 0.08945382477417665,
+      "FS": 0.21890698396444935
+    }
+  }
+}

@@ -1,29 +1,29 @@
 # symbolTorch
 
-将教师 GNN（YS/FS）蒸馏为**可读符号公式**。当前仅保留 **lowExp**（表格 30 维 → YS/FS，推理无图）。
+将 RGAT 教师蒸馏为 **线性基线 + 非线性符号残差**：
 
-## 文档
+```text
+Y = L(x) + R(x)
+```
 
-完整说明见 **[doc/](doc/README.md)**：
-
-- [概述](doc/lowExp_overview.md)
-- [接口输入输出](doc/lowExp_io.md)
-- [调用](doc/lowExp_usage.md)
-- [QA](doc/lowExp_qa.md)
+| 模块 | 职责 |
+|------|------|
+| `liner/` | Ridge/OLS 蒸馏教师 → 线性公式 + 残差 |
+| `lowExp/` | PySR 拟合残差（需 `--liner-run`） |
+| `comb/` | 一键串联并导出最终公式 |
 
 ## 快速开始
 
 ```bash
 cd /home/data/metalgnn/metalForTi/symbolTorch
-pip install -r requirements.txt   # Python >= 3.11
-python scripts/check_env.py
-
-cd lowExp
-python run_distill.py --quick
-# 指定教师：
-# python run_distill.py --ckpt /path/to/rgat_dual.pt --hidden-dim 64
+# 1) 线性
+cd liner && python run_liner.py --head0-name YS --method ridge
+# 2) 残差符号（冒烟）
+cd ../lowExp && python run_distill.py --liner-run ../liner/runs/latest --quick
+# 3) 组合
+cd ../comb && python run_comb.py --liner-run ../liner/runs/latest --lowexp-run ../lowExp/runs/latest
 ```
 
-默认教师：`../modelAll/ysFs/runs/best_rgat_full.pt`  
-默认数据：`../gnnDir/gnndataPT/r-gatPT/`  
-默认输出：`lowExp/runs/<run-name>/`（不覆盖历史；`latest` → 最近一次）
+或：`python comb/run_comb.py --quick ...` 一键跑通。
+
+文档见 [doc/](doc/README.md)、[comb/VERIFY.md](comb/VERIFY.md) 与 `comb/runs/full_ysfs_it400_ms40/RUN_REPORT.md`。

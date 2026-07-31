@@ -1,15 +1,18 @@
-# lowExp
+# lowExp（残差模式）
 
-表格符号蒸馏：`x(30) → YS / FS`，推理不用图。
+对 `liner` 产出的 **教师残差**（`teacher - linear`）做 SymTorch/PySR 符号回归。推理无图。
 
-**完整文档**（接口、调用、QA）→ [`../doc/`](../doc/README.md)
+必须提供 `--liner-run`（含 `_SUCCESS` 与 `residual_targets.pt`）。
 
-## 最短命令
+## 运行
 
 ```bash
 cd /home/data/metalgnn/metalForTi/symbolTorch/lowExp
-python run_distill.py --quick
-python run_distill.py --ckpt ../../modelAll/ysFs/runs/best_rgat_full.pt
+python run_distill.py \
+  --liner-run ../liner/runs/latest \
+  --quick
 ```
 
-结果默认写在 `runs/<时间戳或--run-name>/`；`runs/latest` 指向最近一次。
+正式搜索去掉 `--quick`，可调 `--sr-niterations` / `--sr-maxsize`。
+
+联合入口见 `../comb/run_comb.py`。

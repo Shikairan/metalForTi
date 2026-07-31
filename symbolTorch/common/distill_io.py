@@ -130,7 +130,7 @@ def save_symbolic_module(sym, path: Path, *, target: Optional[str] = None) -> No
 
 
 def make_tabular_lookup_fn(x_ref: np.ndarray, y_ref: np.ndarray) -> Callable:
-    """Row-wise lookup for teacher labels (used during lowExp IO collection)."""
+    """Row-wise lookup for teacher labels (legacy; residual path must not use this)."""
     x_ref = np.asarray(x_ref, dtype=np.float32)
     y_ref = np.asarray(y_ref, dtype=np.float32).reshape(-1, 1)
 
@@ -143,5 +143,73 @@ def make_tabular_lookup_fn(x_ref: np.ndarray, y_ref: np.ndarray) -> Callable:
         return out
 
     return f
+
+
+def distill_residual_targets(
+    x_train: np.ndarray,
+    residual_train: np.ndarray,
+    *,
+    block_name: str,
+    variable_names: Optional[List[str]] = None,
+    sr_params: Optional[Dict[str, Any]] = None,
+    save_path: Optional[Path | str] = None,
+):
+    """Fit a symbolic model to precomputed residuals with SLIME disabled."""
+    from .bound_target import make_bound_target_fn
+
+    target_fn = make_bound_target_fn(x_train, residual_train)
+    SymbolicModel = require_symtorch()
+    sym = SymbolicModel(target_fn, block_name=block_name)
+    fit_params: Dict[str, Any] = {}
+    if variable_names:
+        fit_params["variable_names"] = variable_names
+    distill_kwargs: Dict[str, Any] = {
+        "sr_params": sr_params,
+        "fit_params": fit_params or None,
+        "SLIME": False,
+    }
+    if save_path is not None:
+        distill_kwargs["save_path"] = str(Path(save_path))
+    sym.distill(np.asarray(x_train, dtype=np.float32), **distill_kwargs)
+    sym.switch_to_symbolic()
+    return sym
+
+
+def get_selected_sympy_expr(sym) -> Any:
+    """Return SymPy expression for output dim 0 from a distilled SymbolicModel."""
+    import sympy
+
+    from .expr_ir import parse_sympy_expr
+
+    reg = sym.pysr_regressor
+    model = None
+    for dim, m in sorted(reg.items(), key=lambda kv: kv[0]):
+        if int(dim) == 0:
+            model = m
+            break
+        if model is None:
+            model = m
+    if model is None:
+        raise ValueError("no PySR regressor found on symbolic model")
+    if hasattr(model, "sympy"):
+        expr = model.sympy()
+        if isinstance(expr, sympy.Expr):
+            return expr
+        return parse_sympy_expr(str(expr), FEATURE_NAMES)
+    return parse_sympy_expr(_equation_string(model), FEATURE_NAMES)
+
+
+def evaluate_symbolic_numpy(sym, X: np.ndarray) -> np.ndarray:
+    """Evaluate switched symbolic model on [N, D] → [N]."""
+    import torch
+
+    x = np.asarray(X, dtype=np.float32)
+    with torch.no_grad():
+        out = sym(torch.from_numpy(x))
+    if isinstance(out, torch.Tensor):
+        arr = out.detach().cpu().numpy()
+    else:
+        arr = np.asarray(out)
+    return np.asarray(arr, dtype=np.float64).reshape(-1)
 
 
